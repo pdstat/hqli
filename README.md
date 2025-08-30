@@ -34,6 +34,41 @@ This project demonstrates a sample REST API vulnerable to HQL injection, along w
    .\mvnw.cmd spring-boot:run
    ```
    The API will start on `http://localhost:8443`.
+## Creating Example Users
+
+Before running the enumeration script, create some users using the API. You can use `curl` or PowerShell:
+
+### Using curl
+```bash
+curl -k -X POST "http://localhost:8443/create" \
+   -H "Content-Type: application/json" \
+   -d '{
+      "userId": "60002650",
+      "altUserId": "ALT001",
+      "dob": "1990-01-01",
+      "password": "pass1234"
+   }'
+
+curl -k -X POST "http://localhost:8443/create" \
+   -H "Content-Type: application/json" \
+   -d '{
+      "userId": "60002925",
+      "altUserId": "ALT002",
+      "dob": "1992-02-02",
+      "password": "pass5678"
+   }'
+```
+
+### Using PowerShell
+```powershell
+$body1 = '{"userId": "60002650", "altUserId": "ALT001", "dob": "1990-01-01", "password": "pass1234"}'
+Invoke-RestMethod -Uri "http://localhost:8443/create" -Method Post -Body $body1 -ContentType "application/json"
+
+$body2 = '{"userId": "60002925", "altUserId": "ALT002", "dob": "1992-02-02", "password": "pass5678"}'
+Invoke-RestMethod -Uri "http://localhost:8443/create" -Method Post -Body $body2 -ContentType "application/json"
+```
+
+After creating these users, you can run the Python script to enumerate them.
 
 ## Running the Python Enumeration Script
 
