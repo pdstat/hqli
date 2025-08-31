@@ -2,7 +2,9 @@ package com.pdstat.hqli.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
+import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 
 @Entity
@@ -16,11 +18,9 @@ public class User1 {
     @Column(name = "ALT_USER_ID")
     private String altUserId;
 
-    @Column(name = "DOB")
-    private String dob;
-
-    @Column(name = "PASSWORD")
-    private String password;
+    // Add one-to-one back-reference to Agent; Agent owns the relation via USER_ID FK
+    @OneToOne(mappedBy = "user", fetch = FetchType.LAZY)
+    private Agent agent;
 
     public String getUserId() {
         return userId;
@@ -38,20 +38,12 @@ public class User1 {
         this.altUserId = altUserId;
     }
 
-    public String getDob() {
-        return dob;
+    public Agent getAgent() {
+        return agent;
     }
 
-    public void setDob(String dob) {
-        this.dob = dob;
+    public void setAgent(Agent agent) {
+        this.agent = agent;
     }
 
-    public String getPassword() {
-        return password;
-    }
-
-    public void setPassword(String password) {
-        this.password = password;
-    }
 }
-

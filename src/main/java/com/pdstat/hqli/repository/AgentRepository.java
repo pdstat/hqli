@@ -17,16 +17,26 @@ public class AgentRepository {
     private EntityManager em;
 
     /**
-     * Creates a new User1 via the factory and inserts it.
-     * @return the managed entity instance.
+     * Creates a new User1 and Agent (entity) and inserts them into USERS and AGENTS tables.
      */
     @Transactional
-    public void insert(Agent agent) {
-        User1 agentEntity = new User1();
-        agentEntity.setDob(agent.getDob());
-        agentEntity.setAltUserId(agent.altUserId);
-        agentEntity.setUserId(agent.getUserId());
-        agentEntity.setPassword(agent.getPassword());
+    public void insert(Agent agentDto) {
+        // Persist base user first
+        User1 user = new User1();
+        user.setUserId(agentDto.getUserId());
+        user.setAltUserId(agentDto.getAltUserId());
+        em.persist(user);
+
+        // Persist agent details linked one-to-one to the user
+        com.pdstat.hqli.entity.Agent agentEntity = new com.pdstat.hqli.entity.Agent();
+        // Use the provided userId as agentId if no separate agent id exists in the DTO
+        agentEntity.setAgentId(agentDto.getUserId());
+        agentEntity.setUser(user);
+        agentEntity.setDob(agentDto.getDob());
+        agentEntity.setPassword(agentDto.getPassword());
+        agentEntity.setEmail(agentDto.getEmail());
+        agentEntity.setFirstName(agentDto.getFirstName());
+        agentEntity.setLastName(agentDto.getLastName());
         em.persist(agentEntity);
     }
 

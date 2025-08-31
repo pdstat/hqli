@@ -189,10 +189,10 @@ curl -k -X POST "http://localhost:8443/create" \
 
 ### Using PowerShell
 ```powershell
-$body1 = '{"userId": "60002650", "altUserId": "ALT001", "dob": "1990-01-01", "password": "pass1234"}'
+$body1 = '{"userId": "60002650", "altUserId": "ALT001", "dob": "1990-01-01", "password": "pass1234", "firstName": "John", "lastName": "Doe", "email": "john.doe@example.com"}'
 Invoke-RestMethod -Uri "http://localhost:8443/create" -Method Post -Body $body1 -ContentType "application/json"
 
-$body2 = '{"userId": "60002925", "altUserId": "ALT002", "dob": "1992-02-02", "password": "pass5678"}'
+$body2 = '{"userId": "60002925", "altUserId": "ALT002", "dob": "1992-02-02", "password": "pass5678", "firstName": "Jane", "lastName": "Doe", "email": "jane.doe@example.com"}'
 Invoke-RestMethod -Uri "http://localhost:8443/create" -Method Post -Body $body2 -ContentType "application/json"
 ```
 
