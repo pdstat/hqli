@@ -246,7 +246,7 @@ Other tuning knobs inside the script:
 
 The script prints a total request counter at the end of a run to help understand traffic volume.
 
-## Run with Docker Compose (H2/MySQL/PostgreSQL)
+## Run with Docker Compose (H2/MySQL/PostgreSQL/MariaDB/SQL Server/Oracle/HSQLDB/Derby/SQLite)
 
 You can spin up the app against different databases using Docker:
 
@@ -258,17 +258,55 @@ You can spin up the app against different databases using Docker:
    ```
 
 - MySQL 8:
-   - DB on localhost:3306, app on http://localhost:8444
+   - DB on localhost:3306, app on http://localhost:8443
    - App is configured via env vars to use MySQL and `ddl-auto=create`
    ```powershell
    docker compose up --build mysql app-mysql
    ```
 
 - PostgreSQL 16:
-   - DB on localhost:55432 (mapped to container 5432), app on http://localhost:8445
+   - DB on localhost:55432 (mapped to container 5432), app on http://localhost:8443
    - App is configured via env vars to use PostgreSQL and `ddl-auto=create`
    ```powershell
    docker compose up --build postgres app-postgres
+   ```
+
+- MariaDB 11:
+   - DB on localhost:3307, app on http://localhost:8443
+   ```powershell
+   docker compose up --build mariadb app-mariadb
+   ```
+
+- SQL Server 2022:
+   - DB on localhost:1433, app on http://localhost:8443
+   - Default SA password is set (SA_PASSWORD=Str0ngPwd!), app user hqli/hqli created by init.sql
+   ```powershell
+   docker compose up --build mssql mssql-init app-mssql
+   ```
+
+- Oracle XE 21c:
+   - DB on localhost:11521 (container 1521), app on http://localhost:8443
+   - App user HQLI/hqli configured via env vars
+   ```powershell
+   docker compose up --build oracle app-oracle
+   ```
+
+- HSQLDB (embedded file database):
+   - App uses a mounted volume with the DB files; app on http://localhost:8443
+   ```powershell
+   docker compose up --build app-hsqldb
+   ```
+
+- Apache Derby (embedded file database):
+   - App uses a mounted volume with the DB files; app on http://localhost:8443
+   ```powershell
+   docker compose up --build app-derby
+   ```
+
+- SQLite (file database):
+   - Sidecar creates a volume with /data/hqli.db; app on http://localhost:8443
+   ```powershell
+   docker compose up --build sqlite app-sqlite
    ```
 
 Stop everything with:

@@ -80,3 +80,181 @@ services:
       - SPRING_DATASOURCE_DRIVERCLASSNAME=org.postgresql.Driver
       - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.PostgreSQLDialect
       - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+
+  # MariaDB database
+  mariadb:
+    image: mariadb:11
+    container_name: hqli-mariadb
+    environment:
+      - MARIADB_DATABASE=hqli
+      - MARIADB_USER=hqli
+      - MARIADB_PASSWORD=hqli
+      - MARIADB_ROOT_PASSWORD=root
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Spring Boot app wired to MariaDB
+  app-mariadb:
+    build: .
+    image: hqli-app:local
+    container_name: hqli-app-mariadb
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "8443:8443"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mariadb://mariadb:3306/hqli
+      - SPRING_DATASOURCE_USERNAME=hqli
+      - SPRING_DATASOURCE_PASSWORD=hqli
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=org.mariadb.jdbc.Driver
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.MariaDBDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+
+  # Microsoft SQL Server
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: hqli-mssql
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_PID=Developer
+      - SA_PASSWORD=Str0ngPwd!
+    ports:
+      - "1433:1433"
+    volumes:
+      - ./docker/mssql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/1433' "]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot initializer for SQL Server to create DB and login
+  mssql-init:
+    image: mcr.microsoft.com/mssql-tools
+    container_name: hqli-mssql-init
+    depends_on:
+      mssql:
+        condition: service_started
+    volumes:
+      - ./docker/mssql/init.sql:/scripts/init.sql:ro
+      - ./docker/mssql/init.sh:/scripts/init.sh:ro
+    entrypoint: ["/bin/bash", "/scripts/init.sh"]
+    restart: "no"
+
+  # Spring Boot app wired to SQL Server
+  app-mssql:
+    build: .
+    image: hqli-app:local
+    container_name: hqli-app-mssql
+    depends_on:
+      mssql-init:
+        condition: service_completed_successfully
+    ports:
+      - "8443:8443"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:sqlserver://mssql:1433;databaseName=hqli;encrypt=false
+      - SPRING_DATASOURCE_USERNAME=hqli
+      - SPRING_DATASOURCE_PASSWORD=hqli
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=com.microsoft.sqlserver.jdbc.SQLServerDriver
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.SQLServerDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+
+  # Oracle XE (lightweight dev image)
+  oracle:
+    image: gvenzl/oracle-xe:21-slim
+    container_name: hqli-oracle
+    environment:
+      - ORACLE_PASSWORD=oracle
+      - APP_USER=HQLI
+      - APP_USER_PASSWORD=hqli
+    ports:
+      - "11521:1521"
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1 FROM DUAL;' | sqlplus -L -s HQLI/hqli@localhost:1521/XEPDB1 | grep -q 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+
+  # Spring Boot app wired to Oracle
+  app-oracle:
+    build: .
+    image: hqli-app:local
+    container_name: hqli-app-oracle
+    depends_on:
+      oracle:
+        condition: service_healthy
+    ports:
+      - "8443:8443"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:oracle:thin:@//oracle:1521/XEPDB1
+      - SPRING_DATASOURCE_USERNAME=HQLI
+      - SPRING_DATASOURCE_PASSWORD=hqli
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=oracle.jdbc.OracleDriver
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.OracleDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+      - SPRING_DATASOURCE_HIKARI_INITIALIZATION_FAIL_TIMEOUT=-1
+
+  app-hsqldb:
+    build: .
+    image: hqli-app:local
+    container_name: hqli-app-hsqldb
+    volumes:
+      - hsqldb-data:/data
+    ports:
+      - "8443:8443"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:hsqldb:file:/data/hqli;shutdown=true
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=org.hsqldb.jdbc.JDBCDriver
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.HSQLDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+
+  app-derby:
+    build: .
+    image: hqli-app:local
+    container_name: hqli-app-derby
+    volumes:
+      - derby-data:/data
+    ports:
+      - "8443:8443"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:derby:/data/derby/hqli;create=true
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=org.apache.derby.jdbc.EmbeddedDriver
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.DerbyDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+
+  # SQLite (file-based, no server). We mount a volume and the app connects directly.
+  sqlite:
+    image: busybox
+    container_name: hqli-sqlite
+    volumes:
+      - sqlite-data:/data
+    command: ["sh", "-c", "mkdir -p /data && touch /data/hqli.db && tail -f /dev/null"]
+
+  app-sqlite:
+    build: .
+    image: hqli-app:local
+    container_name: hqli-app-sqlite
+    depends_on:
+      sqlite:
+        condition: service_started
+    volumes:
+      - sqlite-data:/data
+    ports:
+      - "8443:8443"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:sqlite:/data/hqli.db
+      - SPRING_DATASOURCE_DRIVERCLASSNAME=org.sqlite.JDBC
+      - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.community.dialect.SQLiteDialect
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=create
+
+volumes:
+  hsqldb-data:
+  derby-data:
+  sqlite-data:
