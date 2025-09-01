@@ -174,7 +174,10 @@ curl -k -X POST "http://localhost:8443/create" \
       "userId": "60002650",
       "altUserId": "ALT001",
       "dob": "1990-01-01",
-      "password": "pass1234"
+      "password": "pass1234",
+      "firstName": "John",
+      "lastName": "Doe",
+      "email": "john.doe@example.com"
    }'
 
 curl -k -X POST "http://localhost:8443/create" \
@@ -183,7 +186,10 @@ curl -k -X POST "http://localhost:8443/create" \
       "userId": "60002925",
       "altUserId": "ALT002",
       "dob": "1992-02-02",
-      "password": "pass5678"
+      "password": "pass5678",
+      "firstName": "Jane",
+      "lastName": "Doe",
+      "email": "jane.doe@example.com"
    }'
 ```
 
@@ -239,6 +245,36 @@ Other tuning knobs inside the script:
 - `SLEEP_BETWEEN`: Throttle between requests.
 
 The script prints a total request counter at the end of a run to help understand traffic volume.
+
+## Run with Docker Compose (H2/MySQL/PostgreSQL)
+
+You can spin up the app against different databases using Docker:
+
+- H2 (in-memory, default config):
+   - Starts the app on http://localhost:8443
+   - JPA `ddl-auto=create` ensures schema is created at startup
+   ```powershell
+   docker compose up --build app-h2
+   ```
+
+- MySQL 8:
+   - DB on localhost:3306, app on http://localhost:8444
+   - App is configured via env vars to use MySQL and `ddl-auto=create`
+   ```powershell
+   docker compose up --build mysql app-mysql
+   ```
+
+- PostgreSQL 16:
+   - DB on localhost:55432 (mapped to container 5432), app on http://localhost:8445
+   - App is configured via env vars to use PostgreSQL and `ddl-auto=create`
+   ```powershell
+   docker compose up --build postgres app-postgres
+   ```
+
+Stop everything with:
+```powershell
+docker compose down -v
+```
 
 ## Project Structure
 - `src/main/java/com/pdstat/hqli/` - Java source code for the REST API
