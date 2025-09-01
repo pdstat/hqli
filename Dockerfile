@@ -8,7 +8,7 @@ WORKDIR /workspace
 COPY . .
 
 # Build
-RUN ./mvnw -q -DskipTests package
+RUN ./mvnw -U -q -DskipTests package
 
 # ---- Run stage ----
 FROM eclipse-temurin:17-jre
