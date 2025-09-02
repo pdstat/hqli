@@ -224,7 +224,7 @@ services:
     ports:
       - "8443:8443"
     environment:
-      - SPRING_DATASOURCE_URL=jdbc:derby:file:/data/derby/hqli;create=true
+      - SPRING_DATASOURCE_URL=jdbc:derby:/data/derby/hqli;create=true
       - SPRING_DATASOURCE_DRIVERCLASSNAME=org.apache.derby.jdbc.EmbeddedDriver
       - SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.DerbyDialect
       - SPRING_JPA_HIBERNATE_DDL_AUTO=create

@@ -1,30 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
 		<version>3.3.4</version>
-		<relativePath/> <!-- lookup parent from repository -->
+		<relativePath /> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.pdstat</groupId>
 	<artifactId>hqli</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>hqli-example</name>
 	<description>HQLi example app</description>
-	<url/>
+	<url />
 	<licenses>
-		<license/>
+		<license />
 	</licenses>
 	<developers>
-		<developer/>
+		<developer />
 	</developers>
 	<scm>
-		<connection/>
-		<developerConnection/>
-		<tag/>
-		<url/>
+		<connection />
+		<developerConnection />
+		<tag />
+		<url />
 	</scm>
 	<properties>
 		<java.version>17</java.version>
@@ -83,7 +84,11 @@
 		<dependency>
 			<groupId>org.apache.derby</groupId>
 			<artifactId>derby</artifactId>
-			<version>10.17.1.0</version>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.derby</groupId>
+			<artifactId>derbytools</artifactId>
 			<scope>runtime</scope>
 		</dependency>
 		<!-- SQLite JDBC driver -->
@@ -107,7 +112,8 @@
 
 	<dependencyManagement>
 		<dependencies>
-			<!-- Pin community dialects to a valid Hibernate ORM version to avoid accidental mapping to Boot parent version -->
+			<!-- Pin community dialects to a valid Hibernate ORM version to avoid accidental mapping
+			to Boot parent version -->
 			<dependency>
 				<groupId>org.hibernate.orm</groupId>
 				<artifactId>hibernate-community-dialects</artifactId>
@@ -118,21 +124,10 @@
 
 	<build>
 		<plugins>
-    <plugin>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-maven-plugin</artifactId>
-      <executions>
-        <execution>
-          <goals>
-            <goal>repackage</goal>
-          </goals>
-          <!-- Produce a clearly named boot jar -->
-          <configuration>
-            <classifier>exec</classifier>
-          </configuration>
-        </execution>
-      </executions>
-    </plugin>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
 		</plugins>
 	</build>
 

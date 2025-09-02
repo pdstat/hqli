@@ -16,7 +16,7 @@ ENV JAVA_OPTS=""
 WORKDIR /app
 
 # Copy fat jar from build stage
-COPY --from=build /workspace/target/*-exec.jar /app/app.jar
+COPY --from=build /workspace/target/*-SNAPSHOT.jar /app/app.jar
 
 EXPOSE 8443
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]
