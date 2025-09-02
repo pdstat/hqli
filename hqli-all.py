@@ -7,7 +7,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # =======================
 URL = "http://127.0.0.1:8443/checkvalidagent"  # GET endpoint that accepts ?agentCode=
 VERIFY_TLS = False
-PROXY = {"http": "http://127.0.0.1:8080", "https": "http://127.0.0.1:8080"}  # set None to disable
+PROXY = {}  # disabled by default; set via --proxy <url>
 HEADERS = {}  # extra headers if needed
 REQUESTS_SENT = 0
 LAST_MSG = ""
@@ -762,7 +762,7 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
 # Main
 # =======================
 def main():
-    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT, ID_FIELD
+    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT, ID_FIELD, PROXY
     parser = argparse.ArgumentParser(description="HQLi helper")
     parser.add_argument("--debug", action="store_true", help="Enable verbose request logging")
     parser.add_argument("--entity", help="HQL entity name (FQN or simple), e.g. com.pdstat.hqli.entity.User1")
@@ -775,12 +775,14 @@ def main():
     parser.add_argument("--entities", help="Path to a wordlist of entity names (simple or FQN) for --resolve-entities")
     parser.add_argument("--count-rows", action="store_true", help="Print total row count for --entity and exit")
     parser.add_argument("--detect-db", action="store_true", help="Detect database vendor and version via function() probes")
+    parser.add_argument("--proxy", metavar="URL", help="Proxy URL for target requests; applied to both http and https. Example: http://127.0.0.1:8080")
     args = parser.parse_args()
     DEBUG = args.debug
     HQL_ENTITY = args.entity
     AI_MODE = args.ai_mode
     AI_FIELD_COUNT = max(1, min(int(args.ai_field_count or 10), 50))
     TARGET_ENTITY_COUNT = max(1, int(args.entity_count or 2))
+    PROXY = {"http": args.proxy, "https": args.proxy} if args.proxy else {}
 
     if args.detect_db:
         vndr, ver = detect_db_vendor_and_version()
