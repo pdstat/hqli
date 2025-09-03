@@ -69,13 +69,6 @@ public class AgentRepository {
         mi.setStatusCode("401");
         if (count != null && count > 0L) {
             // User exists
-            if ("60002650".equals(payload.getUserName())) {
-                mi.setMessage("Agent license expired");
-            } else {
-                mi.setMessage("Username or password is incorrect");
-            }
-        } else {
-            // User does not exist
             mi.setMessage("Username or password is incorrect");
         }
         return mi;

