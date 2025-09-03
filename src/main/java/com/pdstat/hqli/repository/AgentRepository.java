@@ -40,6 +40,47 @@ public class AgentRepository {
         em.persist(agentEntity);
     }
 
+    public AuthenticateResponse authenticateAgent(AuthenticateRequest request) {
+        AuthenticateResponse resp = new AuthenticateResponse();
+        AuthenticatePayload payload = request.getPayload();
+        try {
+            String hql = String.format(CHECK_AGENT_EXISTS, payload.getUserName(), payload.getUserName());
+
+            Long count = em.createQuery(hql, Long.class).getSingleResult();
+
+            MessageInfo mi = getMessageInfo(payload, count);
+            resp.setMsgInfo(mi);
+        } catch (Exception e) {
+            Payload payloadResp = new Payload(); // empty -> {}
+
+            MessageInfo mi = new MessageInfo();
+            mi.setMessage(e.toString());
+            mi.setMsgStatus("failure");
+            mi.setStatusCode("401");
+
+            resp.setMsgInfo(mi);
+        }
+        return resp;
+    }
+
+    private static MessageInfo getMessageInfo(AuthenticatePayload payload, Long count) {
+        MessageInfo mi = new MessageInfo();
+        mi.setMsgStatus("failure");
+        mi.setStatusCode("401");
+        if (count != null && count > 0L) {
+            // User exists
+            if ("60002650".equals(payload.getUserName())) {
+                mi.setMessage("Agent license expired");
+            } else {
+                mi.setMessage("Username or password is incorrect");
+            }
+        } else {
+            // User does not exist
+            mi.setMessage("Username or password is incorrect");
+        }
+        return mi;
+    }
+
     public CheckAgentResponse checkValidAgent(String agentCode) {
         CheckAgentResponse resp = new CheckAgentResponse();
         try {

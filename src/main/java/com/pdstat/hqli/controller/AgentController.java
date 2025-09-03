@@ -1,6 +1,8 @@
 package com.pdstat.hqli.controller;
 
 import com.pdstat.hqli.model.Agent;
+import com.pdstat.hqli.model.AuthenticateRequest;
+import com.pdstat.hqli.model.AuthenticateResponse;
 import com.pdstat.hqli.model.CheckAgentResponse;
 import com.pdstat.hqli.repository.AgentRepository;
 import org.springframework.http.ResponseEntity;
@@ -26,5 +28,10 @@ public class AgentController {
     @GetMapping(path = "checkvalidagent", produces = "application/json")
     public ResponseEntity<CheckAgentResponse> checkAgent(String agentCode) {
         return ResponseEntity.ok(repository.checkValidAgent(agentCode));
+    }
+
+    @PostMapping(path = "authenticate", produces = "application/json")
+    public ResponseEntity<AuthenticateResponse> authenticateAgent(@RequestBody AuthenticateRequest request) {
+        return ResponseEntity.ok(repository.authenticateAgent(request));
     }
 }
