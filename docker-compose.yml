@@ -55,6 +55,14 @@ services:
       - POSTGRES_DB=hqli
       - POSTGRES_USER=hqli
       - POSTGRES_PASSWORD=hqli
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_timeout=1s
     ports:
       - "55432:5432"
     healthcheck:
