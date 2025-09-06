@@ -450,6 +450,14 @@ We could also send a truthy payload to check for existence of the `/tmp/pwned` f
 
 ### Integrity and availability attacks
 
+#### `pg_sleep`
+
+PostgreSQL has the `pg_sleep` function to cause a delay in the response, which could be used for a denial of service attack. For example, to sleep for 10 seconds, you can use the following payload:
+
+`x' or (function('pg_sleep',10)=0) or '1'='2`
+
+Sending this continuously will flood the JDBC connection pool and cause a denial of service. See the `flood.py` script for an example of how to do this.
+
 #### Search Path Manipulation via `set_config`
 
 With the thanks of AI I discovered the existence of a PostgreSQL property called `search_path`, which lead to some interesting attack vectors affecting both integrity and availability. 
