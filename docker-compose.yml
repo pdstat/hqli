@@ -23,6 +23,11 @@ services:
       - MYSQL_ROOT_PASSWORD=root
     ports:
       - "3306:3306"
+    volumes:
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/999-grant-file.sql:ro
+      # Always enforce FILE privilege on restart even if volume already initialized
+      - ./docker/mysql/grant-file-always.sql:/docker-entrypoint-initdb.d/zzz-grant-file-always.sql:ro
+    command: ["mysqld", "--init-file=/docker-entrypoint-initdb.d/zzz-grant-file-always.sql", "--secure-file-priv="]
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
       interval: 10s
