@@ -186,6 +186,8 @@ services:
       - ORACLE_PASSWORD=oracle
       - APP_USER=HQLI
       - APP_USER_PASSWORD=hqli
+    volumes:
+     - ./docker/oracle:/container-entrypoint-initdb.d
     ports:
       - "11521:1521"
     healthcheck:
