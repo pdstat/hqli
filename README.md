@@ -230,7 +230,9 @@ After creating these users, you can run the Python script to enumerate them.
    python .\hqli-all.py --entity com.pdstat.hqli.entity.User1 --fields .\fields.txt --ai-mode --ai-field-count 15
    ```
 
-## Script feature flags (hqli-all.py)
+## Enumeration script feature flags (hqli-all.py)
+
+You can find the features of the enumeration script below, note it has been developed very much in the context of this vulnerable API, and is not currently generic enough to work against arbitrary HQLi targets without modification.
 
 - `--entity <name>` (required): HQL entity to target, FQN or simple name (e.g., `com.pdstat.hqli.entity.User1`).
 - `--fields <path>` (required): Path to a text wordlist of field names to try; one per line. Lines can contain commas/whitespace and `#` comments.
@@ -584,6 +586,21 @@ However we can use expensive string based operations to cause a delay in the res
 `0' or function('DATALENGTH', function('REPLICATE', function('CONCAT', function('NEWID'), function('REPLICATE','A',4000), function('REPLICATE','B',4000), function('REPLICATE','C',4000), function('REPLICATE','D',4000)), 50000))>0 or '1'='2`
 
 This takes +11 seconds for a single response to return. The flood.py script can be used to continuously send this payload to the server, which will flood the JDBC connection pool and cause a denial of service.
+
+## Flood
+
+The `flood.py` script can be used to continuously send a payload to the vulnerable endpoint, which will flood the JDBC connection pool and cause a denial of service. I hadn't intended to develop this initially, but I needed a way of testing the availability attack vectors, so I whipped this up quickly. Feature flags are:
+
+- `--url`: Base URL (defaults per target) e.g. http://127.0.0.1:8443
+- `--concurrency`: Max simultaneous open connections (default 200)
+- `--interval`: Delay between scheduling requests (seconds, default 0.0)
+- `--sleep`: DB sleep seconds inside injected payload (if supported by chosen DB, default 10)
+- `--db`: Target DB type to tailor sleep function (default: mysql) 
+   - Supported values: `mysql`, `postgres`, `mssql`, `oracle`, `h2`, `hsqldb`
+- `--connect-timeout`: TCP connect timeout (default 3.0)
+- `--write-timeout`: Write/drain timeout (default 3.0)
+- `--linger`: Optional delay after sending before closing (default 0.0)
+- `--progress`: Print per-second progress
 
 ---
 **Disclaimer:** This project is for educational and testing purposes only. Do not use on systems without proper authorization.
