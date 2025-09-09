@@ -239,14 +239,16 @@ After creating these users, you can run the Python script to enumerate them.
 - `--ai-mode`: Use OpenAI to suggest extra likely fields based on the entity name; requires `OPENAI_API_KEY` in the environment.
 - `--ai-field-count <n>`: When `--ai-mode` is set, how many field names to fetch (default 10, clamped 1..50).
 - `--id-field <name>`: Override: name of the identifier property (e.g., `userId`, `agentId`). If omitted, the script tries to discover it.
+- `--resolve-entities`: Probe a wordlist of entity names and print those that are mapped
+- `--entities <path>`: Path to a text wordlist of entity names to try with `--resolve-entities`.
 - `--count-rows`: Print total row count for --entity and exit.
 - `--detect-db`: Detect database vendor and version via `function()` probes.
 - `--proxy <url>`: Use an HTTP proxy (e.g., `http://<proxy_host>:<proxy_port>`). 
 
 Other tuning knobs inside the script:
 - `URL`, `PROXY`, `VERIFY_TLS`, `HEADERS`: HTTP settings for the target endpoint.
-- `USERID_MAXLEN`, `USERID_CHARSET`: User ID discovery parameters.
-- `DEFAULT_MAXLEN`, `FIELD_MAXLEN`, `CHARSET`: Field value brute-force parameters.
+- `ENTITYID_MAXLEN`, `ENTITYID_CHARSET`: Entity ID discovery parameters.
+- `DEFAULT_MAXLEN`, `CHARSET`: Field value brute-force parameters.
 - `SLEEP_BETWEEN`: Throttle between requests.
 
 The script prints a total request counter at the end of a run to help understand traffic volume.
@@ -322,6 +324,8 @@ docker compose down -v
 ## Other attack vectors
 
 Thanks to HQL's `function()` support, you can also try to detect the database vendor and version (see the `--detect-db` flag), and potentially exploit further via SQL functions. Here are some examples I've discovered across the different DBs supported by this project:
+
+**Note: A number of these examples assumes that the database user has sufficient privileges to execute the functions. Which as we know can sometimes be the case in misconfigured systems.**
 
 ### MySQL/MariaDB
 
@@ -414,7 +418,7 @@ Will write the contents of the large object to a file called `/tmp/dump.bin` on 
 
 ![](./images/lo_export.png)
 
-This shows that we have the ability to write arbitrary files to the filesystem in directories that the PostgreSQL server has write access to. This could be used to write web shells or other malicious files if the PostgreSQL server has access to a web root directory.
+This shows that we have the ability to write arbitrary files to the filesystem in directories that the PostgreSQL server has write access to. 
 
 This took me down another rabbit hole! So it seems from this RCE can be achieved. (Note: this example assumes `archive_mode` is enabled in PostgreSQL, which it is in the Docker Compose config for PostgreSQL in this project).
 
@@ -554,15 +558,6 @@ Note the docs has the following to say about this function:
 > You can execute this against another backend that has exactly the same role as the user calling the function. In all other cases, you must be a superuser.
 
 This worked for me as I connected to the database as the `hqli` user and the backend processes were also running as `hqli`.
-
-## Project Structure
-- `src/main/java/com/pdstat/hqli/` - Java source code for the REST API
-- `hqli-all.py` - Python enumeration script
-- `pom.xml` - Maven build file
-
-## References
-- [Spring Boot Documentation](https://spring.io/projects/spring-boot)
-- [SQL/HQL Injection Overview](https://owasp.org/www-community/attacks/SQL_Injection)
 
 ---
 **Disclaimer:** This project is for educational and testing purposes only. Do not use on systems without proper authorization.
